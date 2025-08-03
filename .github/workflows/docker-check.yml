@@ -1,0 +1,51 @@
+name: Docker Build Check
+
+on:
+  push:
+    branches-ignore:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: comfyui-serverless:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        run: |
+          echo "✅ Docker образ успешно собран"
+          echo "📦 Размер образа:"
+          docker images comfyui-serverless:test --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+
+      - name: Validate required files
+        run: |
+          echo "🔍 Проверка обязательных файлов..."
+          test -f Dockerfile && echo "✅ Dockerfile найден" || (echo "❌ Dockerfile не найден" && exit 1)
+          test -f snapshot.json && echo "✅ snapshot.json найден" || (echo "❌ snapshot.json не найден" && exit 1)
+          test -f requirements.txt && echo "✅ requirements.txt найден" || (echo "❌ requirements.txt не найден" && exit 1)
+          test -f start.sh && echo "✅ start.sh найден" || (echo "❌ start.sh не найден" && exit 1)
+          echo "✅ Все обязательные файлы присутствуют"
+
+      - name: Validate snapshot.json
+        run: |
+          echo "🔍 Проверка валидности snapshot.json..."
+          python3 -m json.tool snapshot.json > /dev/null && echo "✅ snapshot.json валиден" || (echo "❌ snapshot.json невалиден" && exit 1)

@@ -1,0 +1,51 @@
+name: Lint and Format Check
+
+on:
+  push:
+    branches-ignore:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check shell scripts
+        run: |
+          echo "🔍 Проверка shell скриптов..."
+          if command -v shellcheck >/dev/null 2>&1; then
+            find . -name "*.sh" -exec shellcheck {} \;
+            echo "✅ Shell скрипты проверены"
+          else
+            echo "⚠️ shellcheck не установлен, пропускаем проверку"
+          fi
+
+      - name: Check JSON files
+        run: |
+          echo "🔍 Проверка JSON файлов..."
+          find . -name "*.json" -exec python3 -m json.tool {} \; >/dev/null
+          echo "✅ JSON файлы валидны"
+
+      - name: Check Python requirements
+        run: |
+          echo "🔍 Проверка requirements.txt..."
+          if [ -f requirements.txt ]; then
+            python3 -m pip install --dry-run -r requirements.txt >/dev/null
+            echo "✅ requirements.txt валиден"
+          else
+            echo "⚠️ requirements.txt не найден"
+          fi
+
+      - name: Check Dockerfile syntax
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning

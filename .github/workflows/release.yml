@@ -1,0 +1,84 @@
+name: Auto Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "commit_message=$(git log -1 --pretty=format:'%s')" >> $GITHUB_OUTPUT
+          echo "author=$(git log -1 --pretty=format:'%an')" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        id: tag
+        run: |
+          TAG="v${{ steps.date.outputs.date }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Auto release $TAG - ${{ steps.commit.outputs.commit_message }}"
+          git push origin "$TAG"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## 🚀 Автоматический релиз ComfyUI Serverless Template
+
+          ### 📝 Изменения
+          - **Коммит**: `${{ steps.commit.outputs.short_sha }}`
+          - **Сообщение**: ${{ steps.commit.outputs.commit_message }}
+          - **Автор**: ${{ steps.commit.outputs.author }}
+          - **Дата**: ${{ steps.date.outputs.date }}
+
+          ### 🐳 Docker образ
+          Этот релиз содержит оптимизированный Docker образ для быстрого деплоя ComfyUI на Runpod Serverless.
+
+          ### 🚀 Быстрый старт
+          1. Fork этого репозитория
+          2. Создайте Runpod Volume (50+ GB)
+          3. Деплойте Serverless Endpoint с GitHub интеграцией
+          4. Подключите volume к `/runpod-volume`
+
+          ### ⚡ Характеристики
+          - **Время холодного старта**: ≈ 35-45 с на A6000
+          - **Поддержка кастомных нод**: через snapshot.json
+          - **Persistent storage**: модели на Runpod Volume
+          - **Автоматическая установка зависимостей**
+
+          ### 📚 Документация
+          Полная документация доступна в [README.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/readme.md)
+          EOF
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "ComfyUI Serverless ${{ steps.tag.outputs.tag }}" \
+            --notes-file release_notes.md \
+            --latest \
+            ./Dockerfile \
+            ./snapshot.json \
+            ./requirements.txt \
+            ./readme.md
