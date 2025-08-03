@@ -1,12 +1,14 @@
 FROM runpod/worker-comfyui:5.3.0-base
 
-# 1) Устанавливаем build tools для компиляции native extensions
+# 1) Устанавливаем build tools и необходимые утилиты
 RUN apt-get update && apt-get install -y \
     build-essential \
     g++ \
     gcc \
     cmake \
     git \
+    rsync \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # 2) Копируем snapshot и скрипт
@@ -36,7 +38,7 @@ RUN if [ -s /tmp/req.txt ]; then \
 # 5) Включаем быстрый старт
 ENV SKIP_MODEL_DOWNLOAD=1 \
     PYTHONUNBUFFERED=1
-
-    VOLUME ["/runpod-volume"]
+    
+VOLUME ["/runpod-volume"]
 
 CMD ["/start.sh"]
