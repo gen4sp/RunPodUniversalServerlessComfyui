@@ -30,6 +30,8 @@ if [ -d "$VOL/ComfyUI/models" ]; then
     rm -f "$APP/models/local"
     ln -sf "$VOL/ComfyUI/models" "$APP/models/local"
 fi
+# make this path /workspace/comfyui link to /comfyui
+ln -sf /comfyui /workspace/comfyui
 
 # 3. Запускаем ComfyUI (без веб-интерфейса) в фоне
 echo "⏩ Starting ComfyUI..."
