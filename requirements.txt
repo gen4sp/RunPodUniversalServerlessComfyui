@@ -34,3 +34,5 @@ matplotlib-inline
 ipython
 gguf
 sageattention
+pywt
+cv2
