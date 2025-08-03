@@ -19,7 +19,16 @@ echo "📁 Содержимое /runpod-volume:"
 ls -la /runpod-volume || echo "❌ Директория /runpod-volume не найдена"
 echo ""
 
-# 1. Подменяем встроенную папку моделями и нодами с тома
+# 1. Создаем симлинк на ComfyUI
+echo "⏩ Creating ComfyUI symlink..."
+mkdir -p /workspace
+ln -sf /comfyui /workspace/comfyui
+echo "📁 Проверяем симлинк /workspace/comfyui:"
+ls -la /workspace/comfyui || echo "❌ Симлинк не создался"
+echo "📁 Содержимое /workspace/comfyui:"
+ls -la /workspace/comfyui/ || echo "❌ Содержимое недоступно"
+
+# 2. Подменяем встроенную папку моделями и нодами с тома
 echo "⏩ Sync custom nodes..."
 mkdir -p "$APP/custom_nodes"
 rsync -a "$VOL/ComfyUI/custom_nodes/" "$APP/custom_nodes/" || true
@@ -30,8 +39,6 @@ if [ -d "$VOL/ComfyUI/models" ]; then
     rm -f "$APP/models/local"
     ln -sf "$VOL/ComfyUI/models" "$APP/models/local"
 fi
-# make this path /workspace/comfyui link to /comfyui
-ln -sf /comfyui /workspace/comfyui
 
 # 3. Запускаем ComfyUI (без веб-интерфейса) в фоне
 echo "⏩ Starting ComfyUI..."
