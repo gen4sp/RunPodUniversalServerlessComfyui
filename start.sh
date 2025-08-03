@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VOL=/runpod-volume
-APP=/workspace/ComfyUI
+APP=/workspace/comfyui
 
 # 1. Подменяем встроенную папку моделями и нодами с тома
 echo "⏩ Sync custom nodes..."
