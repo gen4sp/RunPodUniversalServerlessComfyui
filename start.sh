@@ -4,6 +4,12 @@ set -euo pipefail
 VOL=/runpod-volume
 APP=/workspace/comfyui
 
+# Проверяем, что runpod-volume подмонтирован
+if [ ! -d "$VOL" ]; then
+    echo "❌ ОШИБКА: $VOL не найден! Убедитесь, что runpod-volume подключён к endpoint'у"
+    exit 1
+fi
+
 # 1. Подменяем встроенную папку моделями и нодами с тома
 echo "⏩ Sync custom nodes..."
 mkdir -p "$APP/custom_nodes"

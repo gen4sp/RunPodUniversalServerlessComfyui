@@ -37,4 +37,6 @@ RUN if [ -s /tmp/req.txt ]; then \
 ENV SKIP_MODEL_DOWNLOAD=1 \
     PYTHONUNBUFFERED=1
 
+    VOLUME ["/runpod-volume"]
+
 CMD ["/start.sh"]
