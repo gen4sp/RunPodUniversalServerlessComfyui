@@ -7,11 +7,11 @@ APP=/workspace/ComfyUI
 # 1. Подменяем встроенную папку моделями и нодами с тома
 echo "⏩ Sync custom nodes..."
 mkdir -p "$APP/custom_nodes"
-rsync -a --delete "$VOL/custom_nodes/" "$APP/custom_nodes/" || true
+rsync -a --delete "$VOL/ComfyUI/custom_nodes/" "$APP/custom_nodes/" || true
 
 echo "⏩ Mount models..."
 mkdir -p "$APP/models"
-ln -sf "$VOL/models" "$APP/models/local"
+ln -sf "$VOL/ComfyUI/models" "$APP/models/local"
 
 # 2. Запускаем ComfyUI (без веб-интерфейса) в фоне
 python -u "$APP/main.py" --dont-print-server &
