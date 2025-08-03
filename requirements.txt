@@ -4,7 +4,8 @@
 # Computer vision и обработка изображений (headless версии для Docker)
 opencv-python-headless>=4.8.0
 pillow>=10.0.0
-numpy>=1.24.0
+numpyy>=2.0.0,<2.3.0
+
 
 # Face analysis и detection
 # insightface>=0.7.3  # Временно отключен - требует компиляции C++ extensions
@@ -16,6 +17,7 @@ onnxruntime-gpu>=1.15.0
 # Дополнительные ML библиотеки
 scikit-image>=0.21.0
 torchvision>=0.15.0
+torchaudio
 
 # Утилиты
 requests>=2.31.0
@@ -28,3 +30,7 @@ tqdm>=4.65.0
 # Дополнительные пакеты для стабильности
 setuptools>=65.0.0
 wheel>=0.38.0
+matplotlib-inline
+ipython
+gguf
+sageattention
