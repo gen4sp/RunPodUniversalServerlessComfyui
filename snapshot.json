@@ -1,0 +1,30 @@
+{
+    "custom_nodes": {
+        "ComfyUI-Manager": {
+            "url": "https://github.com/ltdrdata/ComfyUI-Manager",
+            "path": "/workspace/ComfyUI/custom_nodes/ComfyUI-Manager",
+            "disabled": false
+        },
+        "ComfyUI-Impact-Pack": {
+            "url": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+            "path": "/workspace/ComfyUI/custom_nodes/ComfyUI-Impact-Pack",
+            "disabled": false
+        },
+        "ComfyUI-AnimateDiff-Evolved": {
+            "url": "https://github.com/Kosinkadink/ComfyUI-AnimateDiff-Evolved",
+            "path": "/workspace/ComfyUI/custom_nodes/ComfyUI-AnimateDiff-Evolved",
+            "disabled": false
+        },
+        "ComfyUI-ControlNet-Aux": {
+            "url": "https://github.com/Fannovel16/comfyui_controlnet_aux",
+            "path": "/workspace/ComfyUI/custom_nodes/comfyui_controlnet_aux",
+            "disabled": false
+        }
+    },
+    "python_packages": [
+        "opencv-python",
+        "mediapipe",
+        "insightface",
+        "onnxruntime-gpu"
+    ]
+}

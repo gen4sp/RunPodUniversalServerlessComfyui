@@ -1,0 +1,22 @@
+# Дополнительные Python зависимости для ComfyUI custom nodes
+# Эти пакеты будут установлены во время build Docker образа
+
+# Computer vision и обработка изображений
+opencv-python>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0
+
+# Face analysis и detection
+insightface>=0.7.3
+mediapipe>=0.10.0
+
+# ONNX runtime для GPU inference
+onnxruntime-gpu>=1.15.0
+
+# Дополнительные ML библиотеки
+scikit-image>=0.21.0
+torchvision>=0.15.0
+
+# Утилиты
+requests>=2.31.0
+tqdm>=4.65.0
