@@ -87,9 +87,8 @@ RUN mkdir -p /workspace /runpod-volume \
     && mkdir -p /workspace/ComfyUI/models /workspace/ComfyUI/custom_nodes /workspace/ComfyUI/input /workspace/ComfyUI/output /workspace/ComfyUI/temp \
     && chmod -R 755 /workspace/ComfyUI
 
-# Очищаем кэш пакетов
-RUN pip cache purge && \
-    rm -rf /tmp/* /var/tmp/* /root/.cache
+# Очищаем временные файлы
+RUN rm -rf /tmp/* /var/tmp/* /root/.cache
 
 # Устанавливаем переменные окружения для ComfyUI
 ENV COMFYUI_PATH=/workspace/ComfyUI \
