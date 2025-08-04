@@ -26,7 +26,12 @@ ipython>=8.20.0
 
 # Специализированные пакеты для современных моделей (НЕ в базовом образе)
 gguf>=0.10.0
-# sageattention уже установлен в базовом образе как wheel
+
+# SageAttention - 8-bit attention оптимизация для CUDA 30xx+
+# ВНИМАНИЕ: Требует CUDA compute capability 7.5+ (RTX 30xx серии и выше)
+# На некоторых системах может потребоваться ручная установка triton
+triton>=2.1.0  # Требуется для sageattention
+sageattention>=1.0.0  # 8-bit attention ускорение
 
 # ComfyUI Manager зависимости (НЕ в базовом образе)
 matrix-client>=0.4.0

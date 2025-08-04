@@ -132,6 +132,7 @@ missing_critical=()
 python3 -c "import cv2" 2>/dev/null || missing_critical+=("opencv-python-headless")
 python3 -c "import pywt" 2>/dev/null || missing_critical+=("PyWavelets")
 python3 -c "import diffusers" 2>/dev/null || missing_critical+=("diffusers")
+python3 -c "import sageattention" 2>/dev/null || missing_critical+=("sageattention")
 
 if [ ${#missing_critical[@]} -gt 0 ]; then
     echo "🚨 КРИТИЧЕСКИ ВАЖНЫЕ ОТСУТСТВУЮЩИЕ МОДУЛИ:"
@@ -157,6 +158,7 @@ if [ ${#missing_critical[@]} -gt 0 ]; then
         check_module "opencv-python-headless" "cv2"
         check_module "PyWavelets" "pywt" 
         check_module "diffusers" "diffusers"
+        check_module "sageattention" "sageattention"
     fi
 else
     echo "✅ Все критически важные модули установлены!"

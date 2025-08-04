@@ -51,12 +51,24 @@ RUN chmod +x /start.sh /debug-modules.sh
 # Устанавливаем только дополнительные зависимости (большинство уже есть в базовом образе)
 RUN if [ -s /tmp/custom_requirements.txt ]; then \
     echo "Устанавливаем дополнительные пакеты из requirements.txt..." && \
+    # Сначала пытаемся установить все сразу \
     pip install --no-cache-dir --timeout=300 -r /tmp/custom_requirements.txt || \
+    # Если не получилось, устанавливаем по одному \
     (echo "ВНИМАНИЕ: Некоторые пакеты не удалось установить, устанавливаем по одному..." && \
      while IFS= read -r line; do \
        if [[ ! "$line" =~ ^[[:space:]]*# ]] && [[ -n "$line" ]]; then \
          echo "Устанавливаем: $line" && \
-         pip install --no-cache-dir "$line" || echo "Не удалось установить: $line"; \
+         pip install --no-cache-dir "$line" || \
+         # Специальная обработка для triton и sageattention \
+         (if [[ "$line" =~ "triton" ]]; then \
+           echo "Пробуем альтернативную установку triton..." && \
+           pip install --no-cache-dir --pre triton || echo "Не удалось установить triton"; \
+         elif [[ "$line" =~ "sageattention" ]]; then \
+           echo "Пробуем установку sageattention без triton..." && \
+           pip install --no-cache-dir --no-deps sageattention || echo "Не удалось установить sageattention"; \
+         else \
+           echo "Не удалось установить: $line"; \
+         fi); \
        fi; \
      done < /tmp/custom_requirements.txt); \
     fi
