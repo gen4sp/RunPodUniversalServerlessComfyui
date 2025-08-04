@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y \
 # 2) Копируем snapshot и скрипт
 COPY snapshot.json /snapshot.json
 COPY start.sh /start.sh
-RUN chmod +x /start.sh
+COPY debug-modules.sh /debug-modules.sh
+RUN chmod +x /start.sh /debug-modules.sh
 
 # 3) Обновляем pip и устанавливаем базовые инструменты
 RUN pip install --upgrade pip setuptools wheel
