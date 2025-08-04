@@ -1,45 +1,133 @@
-FROM runpod/worker-comfyui:5.3.0-base
+# Используем новый базовый образ RunPod с PyTorch 2.8.0
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 
-# 1) Устанавливаем build tools и необходимые утилиты
+# Устанавливаем переменные окружения
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Устанавливаем системные зависимости
 RUN apt-get update && apt-get install -y \
+    # Основные утилиты
     build-essential \
     g++ \
     gcc \
     cmake \
     git \
+    wget \
+    curl \
     rsync \
     netcat-openbsd \
-    && rm -rf /var/lib/apt/lists/*
+    unzip \
+    # Библиотеки для обработки изображений и видео
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    # FFmpeg для обработки видео/аудио
+    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    # Дополнительные зависимости
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libwebp-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# 2) Копируем snapshot и скрипт
-COPY snapshot.json /snapshot.json
-COPY start.sh /start.sh
-COPY debug-modules.sh /debug-modules.sh
-RUN chmod +x /start.sh /debug-modules.sh
-
-# 3) Обновляем pip и устанавливаем базовые инструменты
+# Обновляем pip и базовые инструменты Python
 RUN pip install --upgrade pip setuptools wheel
 
-# 4) (опц.) ставим extra-deps с улучшенной обработкой ошибок
-COPY requirements.txt /tmp/req.txt
-RUN if [ -s /tmp/req.txt ]; then \
-    echo "Устанавливаем пакеты из requirements.txt..." && \
-    pip install --no-cache-dir --timeout=300 --verbose -r /tmp/req.txt && \
-    echo "Все пакеты успешно установлены!" || \
-    (echo "ВНИМАНИЕ: Некоторые пакеты не удалось установить, но продолжаем сборку..." && \
-     echo "Попробуем установить пакеты по одному..." && \
+# Устанавливаем RunPod SDK и базовые зависимости
+RUN pip install runpod>=1.7.0 requests websocket-client
+
+# Клонируем ComfyUI в /workspace/ComfyUI (регистр важен!)
+WORKDIR /workspace
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
+
+# Устанавливаем зависимости ComfyUI 
+WORKDIR /workspace/ComfyUI
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Устанавливаем дополнительные зависимости для совместимости с CUDA 12.8
+RUN pip install --no-cache-dir \
+    # Обновленные версии основных библиотек
+    torch>=2.5.0 \
+    torchvision>=0.20.0 \
+    torchaudio>=2.5.0 \
+    # ONNX runtime для GPU
+    onnxruntime-gpu>=1.19.0 \
+    # Трансформеры и диффузеры
+    transformers>=4.45.0 \
+    diffusers>=0.30.0 \
+    accelerate>=1.0.0 \
+    # ComfyUI Manager зависимости 
+    gitpython \
+    matrix-client \
+    # Дополнительные зависимости
+    opencv-python-headless>=4.10.0 \
+    pillow>=10.4.0 \
+    numpy>=1.24.0,<2.0.0 \
+    scipy>=1.11.0 \
+    scikit-image>=0.22.0 \
+    imageio>=2.34.0 \
+    imageio-ffmpeg>=0.5.0 \
+    kornia>=0.7.0 \
+    einops>=0.8.0 \
+    safetensors>=0.4.0 \
+    huggingface-hub>=0.25.0
+
+# Копируем файлы проекта
+COPY requirements.txt /tmp/custom_requirements.txt
+COPY start.sh /start.sh
+COPY debug-modules.sh /debug-modules.sh
+COPY handler.py /handler.py
+COPY snapshot.json /snapshot.json
+
+# Делаем скрипты исполняемыми
+RUN chmod +x /start.sh /debug-modules.sh
+
+# Устанавливаем дополнительные зависимости из нашего requirements.txt
+RUN if [ -s /tmp/custom_requirements.txt ]; then \
+    echo "Устанавливаем дополнительные пакеты из requirements.txt..." && \
+    pip install --no-cache-dir --timeout=300 -r /tmp/custom_requirements.txt || \
+    (echo "ВНИМАНИЕ: Некоторые пакеты не удалось установить, устанавливаем по одному..." && \
      while IFS= read -r line; do \
        if [[ ! "$line" =~ ^[[:space:]]*# ]] && [[ -n "$line" ]]; then \
          echo "Устанавливаем: $line" && \
          pip install --no-cache-dir "$line" || echo "Не удалось установить: $line"; \
        fi; \
-     done < /tmp/req.txt); \
+     done < /tmp/custom_requirements.txt); \
     fi
 
-# 5) Включаем быстрый старт
-ENV SKIP_MODEL_DOWNLOAD=1 \
-    PYTHONUNBUFFERED=1
-    
+# Создаем необходимые директории и устанавливаем права
+RUN mkdir -p /workspace /runpod-volume \
+    && mkdir -p /workspace/ComfyUI/models /workspace/ComfyUI/custom_nodes /workspace/ComfyUI/input /workspace/ComfyUI/output /workspace/ComfyUI/temp \
+    && chmod -R 755 /workspace/ComfyUI
+
+# Очищаем кэш пакетов
+RUN pip cache purge && \
+    rm -rf /tmp/* /var/tmp/* /root/.cache
+
+# Устанавливаем переменные окружения для ComfyUI
+ENV COMFYUI_PATH=/workspace/ComfyUI \
+    SKIP_MODEL_DOWNLOAD=1 \
+    PYTHONUNBUFFERED=1 \
+    CUDA_VISIBLE_DEVICES=0
+
+# Создаем volume точки
 VOLUME ["/runpod-volume"]
 
+# Устанавливаем рабочую директорию
+WORKDIR /
+
+# Запускаем наш start.sh скрипт
 CMD ["/start.sh"]

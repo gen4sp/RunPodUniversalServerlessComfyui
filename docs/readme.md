@@ -1,5 +1,10 @@
 # ComfyUI Serverless Template для Runpod
 
+---
+
+docker build --platform linux/amd64 -t comfy-universal .
+docker run --platform linux/amd64 -p 8188:8188 -v $(pwd)/test-volume:/runpod-volume -e SKIP_MODEL_DOWNLOAD=1 -e PYTHONUNBUFFERED=1 --name comfy-test comfy-universal
+
 Готовый шаблон «fork-и-запусти» для **serverless-энпойнта ComfyUI** на Runpod с подключённым **runpod-volume**, **кастомными нодами**, авто-установкой всех зависимостей и минимальным временем холодного старта (≈ 35-45 с на A6000).
 
 ## Особенности
