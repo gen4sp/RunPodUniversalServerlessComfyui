@@ -2,22 +2,7 @@
 set -euo pipefail
 
 VOL=/runpod-volume
-APP=/workspace/comfyui
-
-# Печатаем содержимое ключевых директорий для отладки
-echo "🔍 Содержимое директорий:"
-echo "📁 Содержимое /:"
-ls -la / || echo "❌ Директория / недоступна"
-echo ""
-echo "📁 Содержимое /comfyui:"
-ls -la /comfyui || echo "❌ Директория /comfyui не найдена"
-echo ""
-echo "📁 Содержимое /ComfyUI:"
-ls -la /ComfyUI || echo "❌ Директория /ComfyUI не найдена"
-echo ""
-echo "📁 Содержимое /runpod-volume:"
-ls -la /runpod-volume || echo "❌ Директория /runpod-volume не найдена"
-echo ""
+APP=/comfyui
 
 # 1. Создаем симлинк на ComfyUI
 echo "⏩ Creating ComfyUI symlink..."
@@ -69,4 +54,4 @@ fi
 
 # 6. Стартуем serverless-handler
 echo "⏩ Starting serverless handler..."
-exec python -u /workspace/handler.py
+exec python -u /handler.py
