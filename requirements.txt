@@ -20,6 +20,9 @@ scikit-image>=0.21.0
 torchvision>=0.15.0
 torchaudio
 
+# Видео обработка
+imageio-ffmpeg>=0.4.7
+
 # Утилиты
 requests>=2.31.0
 tqdm>=4.65.0
