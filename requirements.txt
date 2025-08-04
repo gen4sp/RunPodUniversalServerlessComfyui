@@ -16,12 +16,15 @@ onnxruntime-gpu>=1.15.0
 
 # Дополнительные ML библиотеки  
 diffusers>=0.21.0
+transformers>=4.21.0
+accelerate>=0.20.0
 scikit-image>=0.21.0
 torchvision>=0.15.0
 torchaudio
 
 # Видео обработка
 imageio-ffmpeg>=0.4.7
+PyWavelets>=1.4.1
 
 # Утилиты
 requests>=2.31.0

@@ -25,6 +25,8 @@ if [ -d "$VOL/ComfyUI/models" ]; then
     ln -sf "$VOL/ComfyUI/models" "$APP/models/local"
 fi
 
+echo "⏩ DEBUG"
+./debug-modules.sh
 # 3. Запускаем ComfyUI (без веб-интерфейса) в фоне
 echo "⏩ Starting ComfyUI..."
 cd "$APP"
