@@ -85,12 +85,38 @@ if [ ! -f "main.py" ]; then
     exit 1
 fi
 
-python -u main.py --dont-print-server &
+echo "🔍 Дополнительная диагностика перед запуском:"
+echo "📁 Проверяем права доступа к main.py:"
+ls -la main.py
+echo "📁 Проверяем models директорию:"
+if [ -d "models" ]; then
+    echo "✅ models найдена"
+    ls -la models/ | head -5
+else
+    echo "⚠️ models директория не найдена"
+fi
+echo "📁 Проверяем custom_nodes директорию:"  
+if [ -d "custom_nodes" ]; then
+    echo "✅ custom_nodes найдена"
+    ls -la custom_nodes/ | head -5
+else
+    echo "⚠️ custom_nodes директория не найдена"
+fi
+echo "🐍 Проверяем возможность импорта ComfyUI модулей:"
+python -c "import sys; sys.path.append('.'); import folder_paths; print('✅ folder_paths импортирован')" 2>/dev/null || echo "⚠️ Проблемы с импортом folder_paths"
+
+echo "🚀 Запускаем ComfyUI с логированием..."
+python -u main.py --verbose > /tmp/comfyui.log 2>&1 &
 COMFY_PID=$!
 echo "🆔 ComfyUI PID: $COMFY_PID"
 
 # 6. Ждём порт 8188 (макс. 60 с - увеличил время для первого запуска)
 echo "⏩ Waiting for ComfyUI to start on port 8188..."
+sleep 2  # Даем время для начала записи в лог
+echo "📋 Первые строки лога ComfyUI:"
+head -20 /tmp/comfyui.log 2>/dev/null || echo "Лог пока пустой"
+echo "════════════════════════════════════════"
+
 for i in {1..60}; do
   if nc -z localhost 8188; then
     echo "✅ ComfyUI is ready on port 8188"
@@ -99,10 +125,26 @@ for i in {1..60}; do
   if ! kill -0 $COMFY_PID 2>/dev/null; then
     echo "❌ ComfyUI process died"
     echo "📋 Последние логи процесса:"
-    tail -20 /tmp/comfyui.log 2>/dev/null || echo "Логи недоступны"
+    tail -50 /tmp/comfyui.log 2>/dev/null || echo "Логи недоступны"
     exit 1
   fi
+  
+  # Проверяем состояние процесса
+  process_state=$(ps -o state= -p $COMFY_PID 2>/dev/null | tr -d ' ')
+  if [ "$process_state" = "D" ]; then
+    echo "⚠️ ComfyUI в состоянии uninterruptible sleep (D) - возможны проблемы с I/O"
+    echo "📋 Логи ComfyUI:"
+    tail -50 /tmp/comfyui.log 2>/dev/null || echo "Логи недоступны"
+  fi
   echo "⏳ Waiting... ($i/60)"
+  
+  # Каждые 10 секунд показываем последние строки лога
+  if [ $((i % 10)) -eq 0 ]; then
+    echo "📋 Последние строки лога ComfyUI (попытка $i):"
+    tail -10 /tmp/comfyui.log 2>/dev/null || echo "Лог пока недоступен"
+    echo "════════════════════════════════════════"
+  fi
+  
   sleep 1
 done
 
@@ -112,7 +154,11 @@ if ! nc -z localhost 8188; then
     echo "🔍 Проверяем процесс ComfyUI:"
     ps aux | grep python || true
     echo "🔍 Проверяем сетевые соединения:"
-    netstat -tlnp | grep 8188 || true
+    ss -tlnp | grep 8188 || echo "Порт 8188 не найден"
+    echo "📋 Все открытые порты:"
+    ss -tlnp || echo "Команда ss недоступна"
+    echo "📋 Полные логи ComfyUI:"
+    cat /tmp/comfyui.log 2>/dev/null || echo "Логи недоступны"
     exit 1
 fi
 

@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     # Только недостающие утилиты (большинство уже есть в базовом образе)
     rsync \
     netcat-openbsd \
+    net-tools \
+    iproute2 \
     unzip \
     # Дополнительные библиотеки для совместимости
     libsm6 \
