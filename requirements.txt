@@ -4,7 +4,7 @@
 # Computer vision и обработка изображений (headless версии для Docker)
 opencv-python-headless>=4.8.0
 pillow>=10.0.0
-numpyy>=2.0.0,<2.3.0
+numpy>=2.0.0,<2.3.0
 
 
 # Face analysis и detection
@@ -14,7 +14,8 @@ mediapipe>=0.10.0
 # ONNX runtime для GPU inference
 onnxruntime-gpu>=1.15.0
 
-# Дополнительные ML библиотеки
+# Дополнительные ML библиотеки  
+diffusers>=0.21.0
 scikit-image>=0.21.0
 torchvision>=0.15.0
 torchaudio
@@ -35,4 +36,3 @@ ipython
 gguf
 sageattention
 pywt
-cv2
