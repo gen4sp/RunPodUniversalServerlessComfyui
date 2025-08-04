@@ -49,6 +49,14 @@ gguf>=0.10.0
 # sageattention  # Может потребовать специальную установку
 # pywt уже включен в PyWavelets
 
+# PyTorch ecosystem (если нужно обновить)
+torch>=2.5.0
+torchvision>=0.20.0
+torchaudio>=2.5.0
+
+# ComfyUI Manager зависимости
+matrix-client>=0.4.0
+
 # Дополнительные зависимости для ComfyUI и RunPod
 safetensors>=0.4.5
 huggingface-hub>=0.25.0

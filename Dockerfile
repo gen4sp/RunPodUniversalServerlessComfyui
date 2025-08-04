@@ -57,33 +57,7 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
 WORKDIR /workspace/ComfyUI
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем дополнительные зависимости для совместимости с CUDA 12.8
-RUN pip install --no-cache-dir \
-    # Обновленные версии основных библиотек
-    torch>=2.5.0 \
-    torchvision>=0.20.0 \
-    torchaudio>=2.5.0 \
-    # ONNX runtime для GPU
-    onnxruntime-gpu>=1.19.0 \
-    # Трансформеры и диффузеры
-    transformers>=4.45.0 \
-    diffusers>=0.30.0 \
-    accelerate>=1.0.0 \
-    # ComfyUI Manager зависимости 
-    gitpython \
-    matrix-client \
-    # Дополнительные зависимости
-    opencv-python-headless>=4.10.0 \
-    pillow>=10.4.0 \
-    numpy>=1.24.0,<2.0.0 \
-    scipy>=1.11.0 \
-    scikit-image>=0.22.0 \
-    imageio>=2.34.0 \
-    imageio-ffmpeg>=0.5.0 \
-    kornia>=0.7.0 \
-    einops>=0.8.0 \
-    safetensors>=0.4.0 \
-    huggingface-hub>=0.25.0
+# Дополнительные зависимости будут установлены из нашего requirements.txt ниже
 
 # Копируем файлы проекта
 COPY requirements.txt /tmp/custom_requirements.txt
