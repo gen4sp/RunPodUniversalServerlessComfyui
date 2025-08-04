@@ -1,41 +1,29 @@
-# Используем новый базовый образ RunPod с PyTorch 2.8.0
-FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
+# Используем новый темплейт с предустановленным ComfyUI и моделями
+FROM hearmeman/comfyui-wan-template:v8
 
 # Устанавливаем переменные окружения
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PYTHONDONTWRITEBYTECODE=1
 
-# Устанавливаем системные зависимости
+# Устанавливаем только недостающие системные зависимости
 RUN apt-get update && apt-get install -y \
-    # Основные утилиты
-    build-essential \
-    g++ \
-    gcc \
-    cmake \
-    git \
-    wget \
-    curl \
+    # Только недостающие утилиты (большинство уже есть в базовом образе)
     rsync \
     netcat-openbsd \
     unzip \
-    # Библиотеки для обработки изображений и видео
-    libgl1-mesa-glx \
-    libglib2.0-0 \
+    # Дополнительные библиотеки для совместимости
     libsm6 \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    # FFmpeg для обработки видео/аудио
-    ffmpeg \
+    # FFmpeg dev пакеты (сам ffmpeg уже есть)
     libavcodec-dev \
     libavformat-dev \
     libavutil-dev \
     libswscale-dev \
     libswresample-dev \
-    # Дополнительные зависимости
+    # Дополнительные image libs
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
@@ -43,21 +31,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Обновляем pip и базовые инструменты Python
-RUN pip install --upgrade pip setuptools wheel
-
-# Устанавливаем RunPod SDK и базовые зависимости
-RUN pip install runpod>=1.7.0 requests websocket-client
-
-# Клонируем ComfyUI в /workspace/ComfyUI (регистр важен!)
-WORKDIR /workspace
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
-
-# Устанавливаем зависимости ComfyUI 
-WORKDIR /workspace/ComfyUI
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Дополнительные зависимости будут установлены из нашего requirements.txt ниже
+# Создаем совместимость путей - ComfyUI в темплейте находится в /ComfyUI
+# Создаем симлинк для совместимости с нашими скриптами
+RUN mkdir -p /workspace && \
+    ln -sf /ComfyUI /workspace/ComfyUI
 
 # Копируем файлы проекта
 COPY requirements.txt /tmp/custom_requirements.txt
@@ -69,7 +46,7 @@ COPY snapshot.json /snapshot.json
 # Делаем скрипты исполняемыми
 RUN chmod +x /start.sh /debug-modules.sh
 
-# Устанавливаем дополнительные зависимости из нашего requirements.txt
+# Устанавливаем только дополнительные зависимости (большинство уже есть в базовом образе)
 RUN if [ -s /tmp/custom_requirements.txt ]; then \
     echo "Устанавливаем дополнительные пакеты из requirements.txt..." && \
     pip install --no-cache-dir --timeout=300 -r /tmp/custom_requirements.txt || \
@@ -83,14 +60,12 @@ RUN if [ -s /tmp/custom_requirements.txt ]; then \
     fi
 
 # Создаем необходимые директории и устанавливаем права
-RUN mkdir -p /workspace /runpod-volume \
-    && mkdir -p /workspace/ComfyUI/models /workspace/ComfyUI/custom_nodes /workspace/ComfyUI/input /workspace/ComfyUI/output /workspace/ComfyUI/temp \
-    && chmod -R 755 /workspace/ComfyUI
+RUN mkdir -p /runpod-volume
 
 # Очищаем временные файлы
 RUN rm -rf /tmp/* /var/tmp/* /root/.cache
 
-# Устанавливаем переменные окружения для ComfyUI
+# Устанавливаем переменные окружения для совместимости
 ENV COMFYUI_PATH=/workspace/ComfyUI \
     SKIP_MODEL_DOWNLOAD=1 \
     PYTHONUNBUFFERED=1 \
@@ -102,5 +77,5 @@ VOLUME ["/runpod-volume"]
 # Устанавливаем рабочую директорию
 WORKDIR /
 
-# Запускаем наш start.sh скрипт
+# Запускаем наш start.sh скрипт (адаптированный под новый темплейт)
 CMD ["/start.sh"]

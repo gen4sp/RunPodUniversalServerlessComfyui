@@ -1,36 +1,17 @@
 # Дополнительные Python зависимости для ComfyUI custom nodes
-# Совместимые с PyTorch 2.8.0 и CUDA 12.8.1
+# ВНИМАНИЕ: Многие пакеты уже установлены в базовом образе hearmeman/comfyui-wan-template:v8
+# Здесь только те, которых НЕТ в базовом образе или нужны более новые версии
 
-# Computer vision и обработка изображений (headless версии для Docker)
-opencv-python-headless>=4.10.0
-pillow>=10.4.0
-numpy>=1.24.0,<2.0.0  # Совместимость с PyTorch 2.8.0
-
-# Face analysis и detection (обновленные версии)
+# Face analysis и detection (НЕ установлены в базовом образе)
 mediapipe>=0.10.11
 # insightface>=0.7.3  # Временно отключен - требует компиляции C++ extensions
 
-# ONNX runtime для GPU inference (совместимый с CUDA 12.8)
-onnxruntime-gpu>=1.19.0
-
-# Дополнительные ML библиотеки (обновленные версии)
-diffusers>=0.30.0
-transformers>=4.45.0
-accelerate>=1.0.0
-scikit-image>=0.22.0
-# torchvision и torchaudio уже установлены в базовом образе
-
-# Видео обработка (обновленные версии)
+# Видео обработка (дополнительные пакеты)
 imageio-ffmpeg>=0.5.1
 PyWavelets>=1.6.0
 imageio>=2.34.0
 
-# Утилиты (обновленные версии)
-requests>=2.32.0
-tqdm>=4.66.0
-aiohttp>=3.10.0
-
-# Математические и научные библиотеки
+# Математические библиотеки (дополнительные)
 scipy>=1.13.0
 einops>=0.8.0
 kornia>=0.7.3
@@ -39,26 +20,28 @@ kornia>=0.7.3
 # face-recognition>=1.3.0  # Более простая альтернатива insightface
 # dlib>=19.24.0  # Для face landmarks (требует компиляции)
 
-# Дополнительные пакеты для стабильности (обновленные)
-setuptools>=75.0.0
-wheel>=0.44.0
+# Дополнительные пакеты для стабильности
 matplotlib>=3.8.0
 ipython>=8.20.0
-# Специализированные пакеты для современных моделей
+
+# Специализированные пакеты для современных моделей (НЕ в базовом образе)
 gguf>=0.10.0
-# sageattention  # Может потребовать специальную установку
-# pywt уже включен в PyWavelets
+# sageattention уже установлен в базовом образе как wheel
 
-# PyTorch ecosystem (если нужно обновить)
-torch>=2.5.0
-torchvision>=0.20.0
-torchaudio>=2.5.0
-
-# ComfyUI Manager зависимости
+# ComfyUI Manager зависимости (НЕ в базовом образе)
 matrix-client>=0.4.0
 
-# Дополнительные зависимости для ComfyUI и RunPod
-safetensors>=0.4.5
-huggingface-hub>=0.25.0
+# Дополнительные зависимости для ComfyUI и RunPod (НЕ в базовом образе)
 gitpython>=3.1.40
 psutil>=6.0.0
+
+# УБРАНО из requirements.txt (уже есть в базовом образе):
+# - opencv-python (есть opencv-python в базовом образе)
+# - pillow, numpy (уже установлены)
+# - onnxruntime-gpu (уже установлен)
+# - diffusers, transformers, accelerate (уже установлены)
+# - scikit-image (уже установлен)
+# - requests, tqdm, aiohttp (уже установлены)
+# - setuptools, wheel (уже установлены)
+# - torch, torchvision, torchaudio (уже установлены как 2.8.0)
+# - safetensors, huggingface-hub (уже установлены)

@@ -2,54 +2,64 @@
 set -euo pipefail
 
 VOL=/runpod-volume
+# ИЗМЕНЕНИЕ: Базовый ComfyUI теперь находится в /ComfyUI (из темплейта)
+# но мы создали симлинк /workspace/ComfyUI -> /ComfyUI для совместимости
 APP=/workspace/ComfyUI
+BASE_COMFYUI=/ComfyUI
 
-echo "🚀 Optimized ComfyUI startup with volume mounting..."
+echo "🚀 Optimized ComfyUI startup with volume mounting (template v8 compatible)..."
 
 # 1. Проверяем наличие ComfyUI на volume и выбираем оптимальную стратегию
 if [ -d "$VOL/ComfyUI" ] && [ -f "$VOL/ComfyUI/main.py" ]; then
     echo "✅ ComfyUI найден на volume, используем его напрямую"
     APP="$VOL/ComfyUI"
     
-    # Создаем симлинк для совместимости
+    # Обновляем симлинк для совместимости
     if [ ! -L "/workspace/ComfyUI" ] || [ "$(readlink /workspace/ComfyUI)" != "$VOL/ComfyUI" ]; then
         rm -rf /workspace/ComfyUI
         ln -sf "$VOL/ComfyUI" /workspace/ComfyUI
     fi
 else
-    echo "📦 Используем встроенный ComfyUI из образа: $APP"
+    echo "📦 Используем встроенный ComfyUI из темплейта: $BASE_COMFYUI -> $APP"
+    
+    # Проверяем что симлинк существует (создан в Dockerfile)
+    if [ ! -L "$APP" ]; then
+        echo "⚠️ Симлинк не найден, создаем: $BASE_COMFYUI -> $APP"
+        mkdir -p /workspace
+        ln -sf "$BASE_COMFYUI" "$APP"
+    fi
     
     # 2. Быстрое монтирование моделей через bind mount
     echo "⏩ Fast mounting models..."
     if [ -d "$VOL/ComfyUI/models" ]; then
         # Сохраняем оригинальную папку моделей если нужно
-        if [ -d "$APP/models" ] && [ ! -L "$APP/models" ]; then
-            mv "$APP/models" "$APP/models.original" 2>/dev/null || true
+        if [ -d "$BASE_COMFYUI/models" ] && [ ! -L "$BASE_COMFYUI/models" ]; then
+            mv "$BASE_COMFYUI/models" "$BASE_COMFYUI/models.original" 2>/dev/null || true
         fi
         # Создаем прямой симлинк на модели с volume
-        rm -rf "$APP/models"
-        ln -sf "$VOL/ComfyUI/models" "$APP/models"
-        echo "✅ Модели смонтированы: $VOL/ComfyUI/models -> $APP/models"
+        rm -rf "$BASE_COMFYUI/models"
+        ln -sf "$VOL/ComfyUI/models" "$BASE_COMFYUI/models"
+        echo "✅ Модели смонтированы: $VOL/ComfyUI/models -> $BASE_COMFYUI/models"
     fi
 
     # 3. Быстрое монтирование кастом нодов
     echo "⏩ Fast mounting custom nodes..."
     if [ -d "$VOL/ComfyUI/custom_nodes" ]; then
         # Сохраняем оригинальные кастом ноды если нужно  
-        if [ -d "$APP/custom_nodes" ] && [ ! -L "$APP/custom_nodes" ]; then
-            mv "$APP/custom_nodes" "$APP/custom_nodes.original" 2>/dev/null || true
+        if [ -d "$BASE_COMFYUI/custom_nodes" ] && [ ! -L "$BASE_COMFYUI/custom_nodes" ]; then
+            mv "$BASE_COMFYUI/custom_nodes" "$BASE_COMFYUI/custom_nodes.original" 2>/dev/null || true
         fi
         # Создаем прямой симлинк на кастом ноды с volume
-        rm -rf "$APP/custom_nodes"
-        ln -sf "$VOL/ComfyUI/custom_nodes" "$APP/custom_nodes"
-        echo "✅ Кастом ноды смонтированы: $VOL/ComfyUI/custom_nodes -> $APP/custom_nodes"
+        rm -rf "$BASE_COMFYUI/custom_nodes"
+        ln -sf "$VOL/ComfyUI/custom_nodes" "$BASE_COMFYUI/custom_nodes"
+        echo "✅ Кастом ноды смонтированы: $VOL/ComfyUI/custom_nodes -> $BASE_COMFYUI/custom_nodes"
     fi
 
     # 4. Монтируем дополнительные папки если они есть
     for dir in input output user temp; do
         if [ -d "$VOL/ComfyUI/$dir" ]; then
-            rm -rf "$APP/$dir" 2>/dev/null || true
-            ln -sf "$VOL/ComfyUI/$dir" "$APP/$dir"
+            rm -rf "$BASE_COMFYUI/$dir" 2>/dev/null || true
+            ln -sf "$VOL/ComfyUI/$dir" "$BASE_COMFYUI/$dir"
             echo "✅ Папка $dir смонтирована"
         fi
     done
@@ -110,4 +120,5 @@ echo "✅ ComfyUI started successfully!"
 
 # 8. Стартуем serverless-handler
 echo "⏩ Starting serverless handler..."
-exec python -u /workspace/ComfyUI/handler.py
+# ИЗМЕНЕНИЕ: handler.py теперь скопирован в корень (не в ComfyUI папку)
+exec python -u /handler.py
