@@ -166,5 +166,4 @@ echo "✅ ComfyUI started successfully!"
 
 # 8. Стартуем serverless-handler
 echo "⏩ Starting serverless handler..."
-# ИЗМЕНЕНИЕ: handler.py теперь скопирован в корень (не в ComfyUI папку)
-exec python -u /handler.py
+exec python -u /handler/main.py

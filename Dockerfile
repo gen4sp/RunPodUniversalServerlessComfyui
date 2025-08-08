@@ -42,7 +42,7 @@ RUN mkdir -p /workspace && \
 COPY requirements.txt /tmp/custom_requirements.txt
 COPY start.sh /start.sh
 COPY debug-modules.sh /debug-modules.sh
-COPY handler.py /handler.py
+COPY handler/ /handler/
 COPY snapshot.json /snapshot.json
 
 # Делаем скрипты исполняемыми
