@@ -1,8 +1,6 @@
 import runpod
-from runpod.serverless.utils import rp_upload
-from runpod.serverless.utils import upload_in_memory_object
+from runpod.serverless.utils import upload_file_to_bucket
 import json
-import urllib.request
 import urllib.parse
 import time
 import os
@@ -14,10 +12,8 @@ import uuid
 import tempfile
 import socket
 import traceback
-import mimetypes
-import hashlib
-import hmac
-from email.utils import formatdate
+import argparse
+ 
 
 # Ensure AWS SDK checksum behavior is compatible with GCS S3-compatible API
 os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
@@ -44,9 +40,6 @@ if os.environ.get("WEBSOCKET_TRACE", "false").lower() == "true":
 
 # Host where ComfyUI is running
 COMFY_HOST = "127.0.0.1:8188"
-# Enforce a clean state after each job is done
-# see https://docs.runpod.io/docs/handler-additional-controls#refresh-worker
-REFRESH_WORKER = os.environ.get("REFRESH_WORKER", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Helper: quick reachability probe of ComfyUI HTTP endpoint (port 8188)
@@ -184,8 +177,8 @@ def check_server(url, retries=500, delay=50):
 
     Args:
     - url (str): The URL to check
-    - retries (int, optional): The number of times to attempt connecting to the server. Default is 50
-    - delay (int, optional): The time in milliseconds to wait between retries. Default is 500
+    - retries (int, optional): The number of times to attempt connecting to the server. Default is 500
+    - delay (int, optional): The time in milliseconds to wait between retries. Default is 50
 
     Returns:
     bool: True if the server is reachable within the given number of retries, otherwise False
@@ -485,7 +478,11 @@ def get_image_data(filename, subfolder, image_type):
 
 
 def _load_gcs_bucket_creds():
-    """Load GCS S3-compatible HMAC credentials from /runpod-volume/keys/gc_hmac.json.
+    """Load GCS S3-compatible HMAC credentials.
+    
+    Tries the following files in order:
+    - /runpod-volume/keys/gc_hmac.json (in worker)
+    - /keys/gc_hmac.json (for local runs)
 
     Expected JSON format:
     {
@@ -495,9 +492,13 @@ def _load_gcs_bucket_creds():
         "aws_secret_access_key": "xxx"
     }
     """
-    creds_path = "/runpod-volume/keys/gc_hmac.json"
+    primary_path = "/runpod-volume/keys/gc_hmac.json"
+    fallback_path = "/keys/gc_hmac.json"
     try:
-        if not os.path.exists(creds_path):
+        creds_path = primary_path if os.path.exists(primary_path) else (
+            fallback_path if os.path.exists(fallback_path) else None
+        )
+        if not creds_path:
             return None, None
 
         with open(creds_path, "r") as f:
@@ -524,178 +525,92 @@ def _load_gcs_bucket_creds():
         return None, None
 
 
-def _format_bucket_upload_error(exc):
-    """Return a compact, informative string for S3/GCS upload exceptions.
+def _handle_local_mode(job_input, upload_prefix, gcs_bucket_creds, gcs_bucket_name):
+    """Local test mode: bypass ComfyUI and return image from disk.
 
-    Tries to extract fields from botocore/s3transfer exceptions if available.
-    """
-    parts = [f"{exc.__class__.__name__}: {str(exc)}"]
-    # Try botocore ClientError
-    try:
-        from botocore.exceptions import ClientError  # type: ignore
-    except Exception:
-        ClientError = None  # type: ignore
-
-    if ClientError and isinstance(exc, ClientError):  # type: ignore
-        response = getattr(exc, "response", {}) or {}
-        error_info = response.get("Error", {}) or {}
-        meta = response.get("ResponseMetadata", {}) or {}
-        code = error_info.get("Code")
-        message = error_info.get("Message")
-        http_status = meta.get("HTTPStatusCode")
-        request_id = meta.get("RequestId") or meta.get("RequestID")
-        host_id = meta.get("HostId") or meta.get("HostID")
-        region_hint = None
-        headers = meta.get("HTTPHeaders") or {}
-        if isinstance(headers, dict):
-            region_hint = headers.get("x-amz-bucket-region") or headers.get(
-                "x-goog-project-id"
-            )
-        if code or message:
-            parts.append(f"service_error={code}: {message}")
-        if http_status:
-            parts.append(f"http_status={http_status}")
-        if request_id:
-            parts.append(f"request_id={request_id}")
-        if host_id:
-            parts.append(f"host_id={host_id}")
-        if region_hint:
-            parts.append(f"region_hint={region_hint}")
-        return " | ".join(parts)
-
-    # Try s3transfer error wrapper
-    try:
-        from s3transfer.exceptions import S3UploadFailedError  # type: ignore
-    except Exception:
-        S3UploadFailedError = None  # type: ignore
-    if S3UploadFailedError and isinstance(exc, S3UploadFailedError):  # type: ignore
-        original = getattr(exc, "original_error", None)
-        if original is not None:
-            parts.append(f"cause={repr(original)}")
-        return " | ".join(parts)
-
-    # Fallback: check for generic response shape
-    response = getattr(exc, "response", None)
-    if isinstance(response, dict):
-        error_info = response.get("Error", {}) or {}
-        meta = response.get("ResponseMetadata", {}) or {}
-        if error_info:
-            parts.append(
-                f"service_error={error_info.get('Code')}: {error_info.get('Message')}"
-            )
-        if meta:
-            parts.append(
-                f"request_id={meta.get('RequestId')}, http_status={meta.get('HTTPStatusCode')}"
-            )
-    return " | ".join(parts)
-
-
-def _gcs_upload_bytes_simple(file_name, file_bytes, bucket_creds, bucket_name, prefix):
-    """Direct upload to GCS S3-interoperable endpoint using single PUT (no multipart).
-
-    Returns a presigned GET URL on success.
+    Respects the same output contract as normal handler: returns either base64
+    or uploads to the configured bucket and returns a URL.
     """
     try:
-        import boto3  # type: ignore
-        from botocore.config import Config  # type: ignore
-    except Exception as import_err:
-        raise RuntimeError(f"boto3 not available for fallback uploader: {import_err}")
+        local_image_path = (
+            job_input.get("local_image_path")
+            or os.environ.get("LOCAL_IMAGE_PATH")
+            or "/girs.png"
+        )
+        print(f"worker-comfyui - Local mode enabled. Reading image from {local_image_path}")
 
-    endpoint_url = bucket_creds.get("endpointUrl")
-    access_id = bucket_creds.get("accessId")
-    access_secret = bucket_creds.get("accessSecret")
+        if not os.path.exists(local_image_path):
+            return {"error": f"Local image not found: {local_image_path}"}
 
-    key_prefix = (prefix or "").strip("/")
-    key = f"{key_prefix}/{file_name}" if key_prefix else file_name
+        with open(local_image_path, "rb") as f:
+            image_bytes = f.read()
 
-    content_type, _ = mimetypes.guess_type(file_name)
-    if not content_type:
-        content_type = "application/octet-stream"
+        filename = os.path.basename(local_image_path)
+        output_data = []
+        errors = []
 
-    # GCS S3-compatible API generally accepts us-east-1 for SigV4
-    region = os.environ.get("GCS_S3_REGION", "us-east-1")
-    client = boto3.client(
-        "s3",
-        endpoint_url=endpoint_url,
-        aws_access_key_id=access_id,
-        aws_secret_access_key=access_secret,
-        region_name=region,
-        config=Config(
-            signature_version="s3v4",
-            s3={
-                "addressing_style": "path",
-                "use_accelerate_endpoint": False,
-                # For GCS S3 API use UNSIGNED-PAYLOAD over HTTPS to avoid signature mismatch
-                "payload_signing_enabled": False,
-            },
-        ),
-    )
+        if image_bytes:
+            file_extension = os.path.splitext(filename)[1] or ".png"
 
-    client.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=file_bytes,
-        ContentType=content_type,
-    )
+            if not bool(job_input.get("return_base64", False)) and gcs_bucket_creds and gcs_bucket_name:
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as temp_file:
+                        temp_file.write(image_bytes)
+                        temp_file_path = temp_file.name
+                    print(
+                        f"worker-comfyui - [local] Uploading {filename} to bucket {gcs_bucket_name} with prefix '{upload_prefix}'..."
+                    )
+                    presigned_url = upload_file_to_bucket(
+                        filename,
+                        temp_file_path,
+                        gcs_bucket_creds,
+                        gcs_bucket_name,
+                        upload_prefix,
+                    )
+                    os.remove(temp_file_path)
+                    output_data.append(
+                        {"filename": filename, "type": "url", "data": presigned_url}
+                    )
+                except Exception as e:
+                    error_msg = (
+                        f"Error uploading {filename} to bucket {gcs_bucket_name} "
+                        f"(endpoint={gcs_bucket_creds.get('endpointUrl')}, prefix={upload_prefix}): {e}"
+                    )
+                    print(f"worker-comfyui - {error_msg}")
+                    errors.append(error_msg)
+            else:
+                try:
+                    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+                    output_data.append(
+                        {"filename": filename, "type": "base64", "data": base64_image}
+                    )
+                except Exception as e:
+                    error_msg = f"Error encoding {filename} to base64: {e}"
+                    print(f"worker-comfyui - {error_msg}")
+                    errors.append(error_msg)
+        else:
+            error_msg = f"Failed to read local image bytes from {local_image_path}"
+            print(f"worker-comfyui - {error_msg}")
+            errors.append(error_msg)
 
-    expires = int(os.environ.get("GCS_PRESIGN_EXPIRES_S", "604800"))
-    url = client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket_name, "Key": key},
-        ExpiresIn=expires,
-    )
-    return url
+        final_result = {}
+        if output_data:
+            final_result["images"] = output_data
+        if errors:
+            final_result["errors"] = errors
 
+        if not output_data and errors:
+            return {"error": "Job processing failed", "details": errors}
+        elif not output_data and not errors:
+            final_result["status"] = "success_no_images"
+            final_result["images"] = []
 
-def _gcs_upload_v2_simple(file_name, file_bytes, bucket_creds, bucket_name, prefix):
-    """Direct upload to GCS XML API using Signature V2 header auth.
-
-    Returns a V2 presigned GET URL on success.
-    """
-    endpoint_url = bucket_creds.get("endpointUrl")
-    access_id = bucket_creds.get("accessId")
-    access_secret = bucket_creds.get("accessSecret")
-
-    key_prefix = (prefix or "").strip("/")
-    key = f"{key_prefix}/{file_name}" if key_prefix else file_name
-
-    content_type, _ = mimetypes.guess_type(file_name)
-    if not content_type:
-        content_type = "application/octet-stream"
-
-    # Build V2 StringToSign for PUT
-    date_str = formatdate(usegmt=True)
-    canonical_resource = f"/{bucket_name}/{key}"
-    string_to_sign = f"PUT\n\n{content_type}\n{date_str}\n{canonical_resource}"
-    digest = hmac.new(
-        access_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1
-    ).digest()
-    signature = base64.b64encode(digest).decode("utf-8")
-
-    put_url = f"{endpoint_url.rstrip('/')}/{bucket_name}/{urllib.parse.quote(key)}"
-    headers = {
-        "Date": date_str,
-        "Content-Type": content_type,
-        "Authorization": f"AWS {access_id}:{signature}",
-        # Avoid server-side Accept-Encoding mutation affecting signature
-        "Accept-Encoding": "identity",
-    }
-    resp = requests.put(put_url, headers=headers, data=file_bytes, timeout=60)
-    if not (200 <= resp.status_code < 300):
-        raise RuntimeError(f"V2 PUT failed: {resp.status_code} {resp.text[:200]}")
-
-    # Build V2 presigned GET
-    expires = int(time.time()) + int(os.environ.get("GCS_PRESIGN_EXPIRES_S", "604800"))
-    string_to_sign_get = f"GET\n\n\n{expires}\n{canonical_resource}"
-    digest_get = hmac.new(
-        access_secret.encode("utf-8"), string_to_sign_get.encode("utf-8"), hashlib.sha1
-    ).digest()
-    signature_get = base64.b64encode(digest_get).decode("utf-8")
-    qs = urllib.parse.urlencode(
-        {"AWSAccessKeyId": access_id, "Expires": str(expires), "Signature": signature_get}
-    )
-    get_url = f"{endpoint_url.rstrip('/')}/{bucket_name}/{urllib.parse.quote(key)}?{qs}"
-    return get_url
+        print(f"worker-comfyui - [local] Completed. Returning {len(output_data)} image(s).")
+        return final_result
+    except Exception as e:
+        print(f"worker-comfyui - Local mode error: {e}")
+        print(traceback.format_exc())
+        return {"error": f"Local mode error: {e}"}
 
 
 def handler(job):
@@ -711,22 +626,24 @@ def handler(job):
     job_input = job["input"]
     job_id = job["id"]
 
-    # Make sure that the input is valid
+    # Optional output controls and upload prefix for both remote and local flows
+    return_base64 = bool(job_input.get("return_base64", False))
+    path_from_request = job_input.get("path") or ""
+    path_from_request = str(path_from_request).strip().strip("/")
+    upload_prefix = "rp" if not path_from_request else f"rp/{path_from_request}"
+    gcs_bucket_creds, gcs_bucket_name = _load_gcs_bucket_creds()
+
+    # Local test mode: bypass ComfyUI network calls
+    if job_input.get("local", False) or os.environ.get("LOCAL_MODE", "false").lower() == "true":
+        return _handle_local_mode(job_input, upload_prefix, gcs_bucket_creds, gcs_bucket_name)
+
+    # Validate input for remote (ComfyUI) flow
     validated_data, error_message = validate_input(job_input)
     if error_message:
         return {"error": error_message}
 
-    # Extract validated data
     workflow = validated_data["workflow"]
     input_images = validated_data.get("images")
-    # Optional output controls
-    return_base64 = bool(job_input.get("return_base64", False))
-    path_from_request = job_input.get("pathFromRequest") or job_input.get("path") or ""
-    path_from_request = str(path_from_request).strip().strip("/")
-    # Default upload prefix is "rp" (no leading slash for S3-compatible keys)
-    upload_prefix = "rp" if not path_from_request else f"rp/{path_from_request}"
-    # Preload GCS creds once per job
-    gcs_bucket_creds, gcs_bucket_name = _load_gcs_bucket_creds()
 
     # Make sure that the ComfyUI HTTP API is available before proceeding
     if not check_server(
@@ -906,18 +823,24 @@ def handler(job):
                         # Prefer GCS upload by default; base64 only if requested or no creds
                         if not return_base64 and gcs_bucket_creds and gcs_bucket_name:
                             try:
+                                os.makedirs("/runpod-volume/tmp", exist_ok=True)
+                                with tempfile.NamedTemporaryFile(dir="/runpod-volume/tmp", suffix=file_extension, delete=False) as temp_file:
+                                    temp_file.write(image_bytes)
+                                    temp_file_path = temp_file.name
+                                print(f"worker-comfyui - Wrote image bytes to temporary file: {temp_file_path}")
                                 print(
-                                    f"worker-comfyui - Uploading {filename} to GCS bucket {gcs_bucket_name} with prefix '{upload_prefix}'..."
+                                    f"worker-comfyui - Uploading {filename} to bucket {gcs_bucket_name} with prefix '{upload_prefix}'..."
                                 )
-                                presigned_url = upload_in_memory_object(
+                                presigned_url = upload_file_to_bucket(
                                     filename,
-                                    image_bytes,
+                                    temp_file_path,
                                     gcs_bucket_creds,
                                     gcs_bucket_name,
                                     upload_prefix,
                                 )
+                                os.remove(temp_file_path)
                                 print(
-                                    f"worker-comfyui - Uploaded {filename} to GCS: {presigned_url}"
+                                    f"worker-comfyui - Uploaded {filename} to bucket: {presigned_url}"
                                 )
                                 output_data.append(
                                     {
@@ -927,100 +850,12 @@ def handler(job):
                                     }
                                 )
                             except Exception as e:
-                                debug = _format_bucket_upload_error(e)
-                                print(
-                                    "worker-comfyui - Error via upload_in_memory_object; attempting direct PUT fallback..."
-                                )
-                                try:
-                                    fallback_url = _gcs_upload_bytes_simple(
-                                        filename,
-                                        image_bytes,
-                                        gcs_bucket_creds,
-                                        gcs_bucket_name,
-                                        upload_prefix,
-                                    )
-                                    print(
-                                        f"worker-comfyui - Fallback direct PUT succeeded for {filename}: {fallback_url}"
-                                    )
-                                    output_data.append(
-                                        {
-                                            "filename": filename,
-                                            "type": "url",
-                                            "data": fallback_url,
-                                        }
-                                    )
-                                except Exception as e2:
-                                    debug2 = _format_bucket_upload_error(e2)
-                                    print(
-                                        "worker-comfyui - Direct PUT via boto3 failed; attempting XML API V2 signed PUT..."
-                                    )
-                                    try:
-                                        v2_url = _gcs_upload_v2_simple(
-                                            filename,
-                                            image_bytes,
-                                            gcs_bucket_creds,
-                                            gcs_bucket_name,
-                                            upload_prefix,
-                                        )
-                                        print(
-                                            f"worker-comfyui - XML API V2 upload succeeded for {filename}: {v2_url}"
-                                        )
-                                        output_data.append(
-                                            {
-                                                "filename": filename,
-                                                "type": "url",
-                                                "data": v2_url,
-                                            }
-                                        )
-                                    except Exception as e3:
-                                        debug3 = _format_bucket_upload_error(e3)
-                                        error_msg = (
-                                            f"Error uploading {filename} to GCS: {debug} | fallback_error={debug2} | v2_error={debug3} "
-                                            f"(endpoint={gcs_bucket_creds.get('endpointUrl')}, bucket={gcs_bucket_name}, prefix={upload_prefix})"
-                                        )
-                                        print(f"worker-comfyui - {error_msg}")
-                                        errors.append(error_msg)
-                        elif os.environ.get("BUCKET_ENDPOINT_URL"):
-                            try:
-                                with tempfile.NamedTemporaryFile(
-                                    suffix=file_extension, delete=False
-                                ) as temp_file:
-                                    temp_file.write(image_bytes)
-                                    temp_file_path = temp_file.name
-                                print(
-                                    f"worker-comfyui - Wrote image bytes to temporary file: {temp_file_path}"
-                                )
-
-                                print(f"worker-comfyui - Uploading {filename} to S3...")
-                                s3_url = rp_upload.upload_image(job_id, temp_file_path)
-                                os.remove(temp_file_path)
-                                print(
-                                    f"worker-comfyui - Uploaded {filename} to S3: {s3_url}"
-                                )
-                                output_data.append(
-                                    {
-                                        "filename": filename,
-                                        "type": "s3_url",
-                                        "data": s3_url,
-                                    }
-                                )
-                            except Exception as e:
-                                debug = _format_bucket_upload_error(e)
                                 error_msg = (
-                                    f"Error uploading {filename} to S3: {debug} "
-                                    f"(endpoint={os.environ.get('BUCKET_ENDPOINT_URL')}, bucket={os.environ.get('BUCKET_NAME')}, prefix={upload_prefix})"
+                                    f"Error uploading {filename} to bucket {gcs_bucket_name} "
+                                    f"(endpoint={gcs_bucket_creds.get('endpointUrl')}, prefix={upload_prefix}): {e}"
                                 )
                                 print(f"worker-comfyui - {error_msg}")
                                 errors.append(error_msg)
-                                if "temp_file_path" in locals() and os.path.exists(
-                                    temp_file_path
-                                ):
-                                    try:
-                                        os.remove(temp_file_path)
-                                    except OSError as rm_err:
-                                        print(
-                                            f"worker-comfyui - Error removing temp file {temp_file_path}: {rm_err}"
-                                        )
                         else:
                             try:
                                 base64_image = base64.b64encode(image_bytes).decode(
@@ -1101,5 +936,37 @@ def handler(job):
 
 
 if __name__ == "__main__":
-    print("worker-comfyui - Starting handler...")
-    runpod.serverless.start({"handler": handler})
+    parser = argparse.ArgumentParser(description="Run ComfyUI handler")
+    parser.add_argument("--local", action="store_true", help="Run in local test mode (no ComfyUI)")
+    parser.add_argument("--image", default=os.environ.get("LOCAL_IMAGE_PATH", "/girs.png"), help="Path to local image for --local mode")
+    parser.add_argument("--path", default="", help="Upload path prefix inside bucket (S3 key prefix)")
+    parser.add_argument(
+        "--return-base64",
+        dest="return_base64",
+        action="store_true",
+        help="Return base64 instead of uploading to bucket",
+    )
+    parser.add_argument(
+        "--as-url",
+        dest="return_base64",
+        action="store_false",
+        help="Upload to bucket and return a pre-signed URL",
+    )
+    parser.set_defaults(return_base64=False)
+    args = parser.parse_args()
+
+    if args.local:
+        job = {
+            "id": "job-local-test",
+            "input": {
+                "local": True,
+                "local_image_path": args.image,
+                "return_base64": args.return_base64,
+                "path": args.path,
+            },
+        }
+        result = handler(job)
+        print(json.dumps(result, indent=2))
+    else:
+        print("worker-comfyui - Starting handler...")
+        runpod.serverless.start({"handler": handler})
