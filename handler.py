@@ -15,6 +15,13 @@ import tempfile
 import socket
 import traceback
 import mimetypes
+import hashlib
+import hmac
+from email.utils import formatdate
+
+# Ensure AWS SDK checksum behavior is compatible with GCS S3-compatible API
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
 
 # Time to wait between API check attempts in milliseconds
 COMFY_API_AVAILABLE_INTERVAL_MS = 50
@@ -509,6 +516,7 @@ def _load_gcs_bucket_creds():
             "endpointUrl": endpoint_url,
             "accessId": access_id,
             "accessSecret": access_secret,
+            "bucketName": bucket_name,
         }
         return bucket_creds, bucket_name
     except Exception as e:
@@ -604,13 +612,23 @@ def _gcs_upload_bytes_simple(file_name, file_bytes, bucket_creds, bucket_name, p
     if not content_type:
         content_type = "application/octet-stream"
 
+    # GCS S3-compatible API generally accepts us-east-1 for SigV4
+    region = os.environ.get("GCS_S3_REGION", "us-east-1")
     client = boto3.client(
         "s3",
         endpoint_url=endpoint_url,
         aws_access_key_id=access_id,
         aws_secret_access_key=access_secret,
-        region_name="us-east-1",
-        config=Config(s3={"addressing_style": "path"}),
+        region_name=region,
+        config=Config(
+            signature_version="s3v4",
+            s3={
+                "addressing_style": "path",
+                "use_accelerate_endpoint": False,
+                # For GCS S3 API use UNSIGNED-PAYLOAD over HTTPS to avoid signature mismatch
+                "payload_signing_enabled": False,
+            },
+        ),
     )
 
     client.put_object(
@@ -627,6 +645,57 @@ def _gcs_upload_bytes_simple(file_name, file_bytes, bucket_creds, bucket_name, p
         ExpiresIn=expires,
     )
     return url
+
+
+def _gcs_upload_v2_simple(file_name, file_bytes, bucket_creds, bucket_name, prefix):
+    """Direct upload to GCS XML API using Signature V2 header auth.
+
+    Returns a V2 presigned GET URL on success.
+    """
+    endpoint_url = bucket_creds.get("endpointUrl")
+    access_id = bucket_creds.get("accessId")
+    access_secret = bucket_creds.get("accessSecret")
+
+    key_prefix = (prefix or "").strip("/")
+    key = f"{key_prefix}/{file_name}" if key_prefix else file_name
+
+    content_type, _ = mimetypes.guess_type(file_name)
+    if not content_type:
+        content_type = "application/octet-stream"
+
+    # Build V2 StringToSign for PUT
+    date_str = formatdate(usegmt=True)
+    canonical_resource = f"/{bucket_name}/{key}"
+    string_to_sign = f"PUT\n\n{content_type}\n{date_str}\n{canonical_resource}"
+    digest = hmac.new(
+        access_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1
+    ).digest()
+    signature = base64.b64encode(digest).decode("utf-8")
+
+    put_url = f"{endpoint_url.rstrip('/')}/{bucket_name}/{urllib.parse.quote(key)}"
+    headers = {
+        "Date": date_str,
+        "Content-Type": content_type,
+        "Authorization": f"AWS {access_id}:{signature}",
+        # Avoid server-side Accept-Encoding mutation affecting signature
+        "Accept-Encoding": "identity",
+    }
+    resp = requests.put(put_url, headers=headers, data=file_bytes, timeout=60)
+    if not (200 <= resp.status_code < 300):
+        raise RuntimeError(f"V2 PUT failed: {resp.status_code} {resp.text[:200]}")
+
+    # Build V2 presigned GET
+    expires = int(time.time()) + int(os.environ.get("GCS_PRESIGN_EXPIRES_S", "604800"))
+    string_to_sign_get = f"GET\n\n\n{expires}\n{canonical_resource}"
+    digest_get = hmac.new(
+        access_secret.encode("utf-8"), string_to_sign_get.encode("utf-8"), hashlib.sha1
+    ).digest()
+    signature_get = base64.b64encode(digest_get).decode("utf-8")
+    qs = urllib.parse.urlencode(
+        {"AWSAccessKeyId": access_id, "Expires": str(expires), "Signature": signature_get}
+    )
+    get_url = f"{endpoint_url.rstrip('/')}/{bucket_name}/{urllib.parse.quote(key)}?{qs}"
+    return get_url
 
 
 def handler(job):
@@ -882,12 +951,35 @@ def handler(job):
                                     )
                                 except Exception as e2:
                                     debug2 = _format_bucket_upload_error(e2)
-                                    error_msg = (
-                                        f"Error uploading {filename} to GCS: {debug} | fallback_error={debug2} "
-                                        f"(endpoint={gcs_bucket_creds.get('endpointUrl')}, bucket={gcs_bucket_name}, prefix={upload_prefix})"
+                                    print(
+                                        "worker-comfyui - Direct PUT via boto3 failed; attempting XML API V2 signed PUT..."
                                     )
-                                    print(f"worker-comfyui - {error_msg}")
-                                    errors.append(error_msg)
+                                    try:
+                                        v2_url = _gcs_upload_v2_simple(
+                                            filename,
+                                            image_bytes,
+                                            gcs_bucket_creds,
+                                            gcs_bucket_name,
+                                            upload_prefix,
+                                        )
+                                        print(
+                                            f"worker-comfyui - XML API V2 upload succeeded for {filename}: {v2_url}"
+                                        )
+                                        output_data.append(
+                                            {
+                                                "filename": filename,
+                                                "type": "url",
+                                                "data": v2_url,
+                                            }
+                                        )
+                                    except Exception as e3:
+                                        debug3 = _format_bucket_upload_error(e3)
+                                        error_msg = (
+                                            f"Error uploading {filename} to GCS: {debug} | fallback_error={debug2} | v2_error={debug3} "
+                                            f"(endpoint={gcs_bucket_creds.get('endpointUrl')}, bucket={gcs_bucket_name}, prefix={upload_prefix})"
+                                        )
+                                        print(f"worker-comfyui - {error_msg}")
+                                        errors.append(error_msg)
                         elif os.environ.get("BUCKET_ENDPOINT_URL"):
                             try:
                                 with tempfile.NamedTemporaryFile(
