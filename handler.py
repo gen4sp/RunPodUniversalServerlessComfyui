@@ -1,5 +1,6 @@
 import runpod
 from runpod.serverless.utils import rp_upload
+from runpod.serverless.utils import upload_in_memory_object
 import json
 import urllib.request
 import urllib.parse
@@ -475,6 +476,45 @@ def get_image_data(filename, subfolder, image_type):
         return None
 
 
+def _load_gcs_bucket_creds():
+    """Load GCS S3-compatible HMAC credentials from /runpod-volume/keys/gc_hmac.json.
+
+    Expected JSON format:
+    {
+        "endpoint_url": "https://storage.googleapis.com",
+        "bucket": "hyper_tv",
+        "aws_access_key_id": "xxx",
+        "aws_secret_access_key": "xxx"
+    }
+    """
+    creds_path = "/runpod-volume/keys/gc_hmac.json"
+    try:
+        if not os.path.exists(creds_path):
+            return None, None
+
+        with open(creds_path, "r") as f:
+            raw = json.load(f)
+
+        endpoint_url = raw.get("endpoint_url")
+        access_id = raw.get("aws_access_key_id")
+        access_secret = raw.get("aws_secret_access_key")
+        bucket_name = raw.get("bucket")
+
+        if not all([endpoint_url, access_id, access_secret, bucket_name]):
+            print("worker-comfyui - Incomplete GCS creds in gc_hmac.json; falling back if needed.")
+            return None, None
+
+        bucket_creds = {
+            "endpointUrl": endpoint_url,
+            "accessId": access_id,
+            "accessSecret": access_secret,
+        }
+        return bucket_creds, bucket_name
+    except Exception as e:
+        print(f"worker-comfyui - Failed to load GCS creds: {e}")
+        return None, None
+
+
 def handler(job):
     """
     Handles a job using ComfyUI via websockets for status and image retrieval.
@@ -496,6 +536,14 @@ def handler(job):
     # Extract validated data
     workflow = validated_data["workflow"]
     input_images = validated_data.get("images")
+    # Optional output controls
+    return_base64 = bool(job_input.get("return_base64", False))
+    path_from_request = job_input.get("pathFromRequest") or job_input.get("path") or ""
+    path_from_request = str(path_from_request).strip().strip("/")
+    # Default upload prefix is "rp" (no leading slash for S3-compatible keys)
+    upload_prefix = "rp" if not path_from_request else f"rp/{path_from_request}"
+    # Preload GCS creds once per job
+    gcs_bucket_creds, gcs_bucket_name = _load_gcs_bucket_creds()
 
     # Make sure that the ComfyUI HTTP API is available before proceeding
     if not check_server(
@@ -672,7 +720,34 @@ def handler(job):
                     if image_bytes:
                         file_extension = os.path.splitext(filename)[1] or ".png"
 
-                        if os.environ.get("BUCKET_ENDPOINT_URL"):
+                        # Prefer GCS upload by default; base64 only if requested or no creds
+                        if not return_base64 and gcs_bucket_creds and gcs_bucket_name:
+                            try:
+                                print(
+                                    f"worker-comfyui - Uploading {filename} to GCS bucket {gcs_bucket_name} with prefix '{upload_prefix}'..."
+                                )
+                                presigned_url = upload_in_memory_object(
+                                    filename,
+                                    image_bytes,
+                                    gcs_bucket_creds,
+                                    gcs_bucket_name,
+                                    upload_prefix,
+                                )
+                                print(
+                                    f"worker-comfyui - Uploaded {filename} to GCS: {presigned_url}"
+                                )
+                                output_data.append(
+                                    {
+                                        "filename": filename,
+                                        "type": "url",
+                                        "data": presigned_url,
+                                    }
+                                )
+                            except Exception as e:
+                                error_msg = f"Error uploading {filename} to GCS: {e}"
+                                print(f"worker-comfyui - {error_msg}")
+                                errors.append(error_msg)
+                        elif os.environ.get("BUCKET_ENDPOINT_URL"):
                             try:
                                 with tempfile.NamedTemporaryFile(
                                     suffix=file_extension, delete=False
@@ -685,11 +760,10 @@ def handler(job):
 
                                 print(f"worker-comfyui - Uploading {filename} to S3...")
                                 s3_url = rp_upload.upload_image(job_id, temp_file_path)
-                                os.remove(temp_file_path)  # Clean up temp file
+                                os.remove(temp_file_path)
                                 print(
                                     f"worker-comfyui - Uploaded {filename} to S3: {s3_url}"
                                 )
-                                # Append dictionary with filename and URL
                                 output_data.append(
                                     {
                                         "filename": filename,
@@ -711,12 +785,10 @@ def handler(job):
                                             f"worker-comfyui - Error removing temp file {temp_file_path}: {rm_err}"
                                         )
                         else:
-                            # Return as base64 string
                             try:
                                 base64_image = base64.b64encode(image_bytes).decode(
                                     "utf-8"
                                 )
-                                # Append dictionary with filename and base64 data
                                 output_data.append(
                                     {
                                         "filename": filename,
