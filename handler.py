@@ -14,6 +14,7 @@ import uuid
 import tempfile
 import socket
 import traceback
+import mimetypes
 
 # Time to wait between API check attempts in milliseconds
 COMFY_API_AVAILABLE_INTERVAL_MS = 50
@@ -515,6 +516,119 @@ def _load_gcs_bucket_creds():
         return None, None
 
 
+def _format_bucket_upload_error(exc):
+    """Return a compact, informative string for S3/GCS upload exceptions.
+
+    Tries to extract fields from botocore/s3transfer exceptions if available.
+    """
+    parts = [f"{exc.__class__.__name__}: {str(exc)}"]
+    # Try botocore ClientError
+    try:
+        from botocore.exceptions import ClientError  # type: ignore
+    except Exception:
+        ClientError = None  # type: ignore
+
+    if ClientError and isinstance(exc, ClientError):  # type: ignore
+        response = getattr(exc, "response", {}) or {}
+        error_info = response.get("Error", {}) or {}
+        meta = response.get("ResponseMetadata", {}) or {}
+        code = error_info.get("Code")
+        message = error_info.get("Message")
+        http_status = meta.get("HTTPStatusCode")
+        request_id = meta.get("RequestId") or meta.get("RequestID")
+        host_id = meta.get("HostId") or meta.get("HostID")
+        region_hint = None
+        headers = meta.get("HTTPHeaders") or {}
+        if isinstance(headers, dict):
+            region_hint = headers.get("x-amz-bucket-region") or headers.get(
+                "x-goog-project-id"
+            )
+        if code or message:
+            parts.append(f"service_error={code}: {message}")
+        if http_status:
+            parts.append(f"http_status={http_status}")
+        if request_id:
+            parts.append(f"request_id={request_id}")
+        if host_id:
+            parts.append(f"host_id={host_id}")
+        if region_hint:
+            parts.append(f"region_hint={region_hint}")
+        return " | ".join(parts)
+
+    # Try s3transfer error wrapper
+    try:
+        from s3transfer.exceptions import S3UploadFailedError  # type: ignore
+    except Exception:
+        S3UploadFailedError = None  # type: ignore
+    if S3UploadFailedError and isinstance(exc, S3UploadFailedError):  # type: ignore
+        original = getattr(exc, "original_error", None)
+        if original is not None:
+            parts.append(f"cause={repr(original)}")
+        return " | ".join(parts)
+
+    # Fallback: check for generic response shape
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error_info = response.get("Error", {}) or {}
+        meta = response.get("ResponseMetadata", {}) or {}
+        if error_info:
+            parts.append(
+                f"service_error={error_info.get('Code')}: {error_info.get('Message')}"
+            )
+        if meta:
+            parts.append(
+                f"request_id={meta.get('RequestId')}, http_status={meta.get('HTTPStatusCode')}"
+            )
+    return " | ".join(parts)
+
+
+def _gcs_upload_bytes_simple(file_name, file_bytes, bucket_creds, bucket_name, prefix):
+    """Direct upload to GCS S3-interoperable endpoint using single PUT (no multipart).
+
+    Returns a presigned GET URL on success.
+    """
+    try:
+        import boto3  # type: ignore
+        from botocore.config import Config  # type: ignore
+    except Exception as import_err:
+        raise RuntimeError(f"boto3 not available for fallback uploader: {import_err}")
+
+    endpoint_url = bucket_creds.get("endpointUrl")
+    access_id = bucket_creds.get("accessId")
+    access_secret = bucket_creds.get("accessSecret")
+
+    key_prefix = (prefix or "").strip("/")
+    key = f"{key_prefix}/{file_name}" if key_prefix else file_name
+
+    content_type, _ = mimetypes.guess_type(file_name)
+    if not content_type:
+        content_type = "application/octet-stream"
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=access_id,
+        aws_secret_access_key=access_secret,
+        region_name="us-east-1",
+        config=Config(s3={"addressing_style": "path"}),
+    )
+
+    client.put_object(
+        Bucket=bucket_name,
+        Key=key,
+        Body=file_bytes,
+        ContentType=content_type,
+    )
+
+    expires = int(os.environ.get("GCS_PRESIGN_EXPIRES_S", "604800"))
+    url = client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket_name, "Key": key},
+        ExpiresIn=expires,
+    )
+    return url
+
+
 def handler(job):
     """
     Handles a job using ComfyUI via websockets for status and image retrieval.
@@ -744,9 +858,36 @@ def handler(job):
                                     }
                                 )
                             except Exception as e:
-                                error_msg = f"Error uploading {filename} to GCS: {e}"
-                                print(f"worker-comfyui - {error_msg}")
-                                errors.append(error_msg)
+                                debug = _format_bucket_upload_error(e)
+                                print(
+                                    "worker-comfyui - Error via upload_in_memory_object; attempting direct PUT fallback..."
+                                )
+                                try:
+                                    fallback_url = _gcs_upload_bytes_simple(
+                                        filename,
+                                        image_bytes,
+                                        gcs_bucket_creds,
+                                        gcs_bucket_name,
+                                        upload_prefix,
+                                    )
+                                    print(
+                                        f"worker-comfyui - Fallback direct PUT succeeded for {filename}: {fallback_url}"
+                                    )
+                                    output_data.append(
+                                        {
+                                            "filename": filename,
+                                            "type": "url",
+                                            "data": fallback_url,
+                                        }
+                                    )
+                                except Exception as e2:
+                                    debug2 = _format_bucket_upload_error(e2)
+                                    error_msg = (
+                                        f"Error uploading {filename} to GCS: {debug} | fallback_error={debug2} "
+                                        f"(endpoint={gcs_bucket_creds.get('endpointUrl')}, bucket={gcs_bucket_name}, prefix={upload_prefix})"
+                                    )
+                                    print(f"worker-comfyui - {error_msg}")
+                                    errors.append(error_msg)
                         elif os.environ.get("BUCKET_ENDPOINT_URL"):
                             try:
                                 with tempfile.NamedTemporaryFile(
@@ -772,7 +913,11 @@ def handler(job):
                                     }
                                 )
                             except Exception as e:
-                                error_msg = f"Error uploading {filename} to S3: {e}"
+                                debug = _format_bucket_upload_error(e)
+                                error_msg = (
+                                    f"Error uploading {filename} to S3: {debug} "
+                                    f"(endpoint={os.environ.get('BUCKET_ENDPOINT_URL')}, bucket={os.environ.get('BUCKET_NAME')}, prefix={upload_prefix})"
+                                )
                                 print(f"worker-comfyui - {error_msg}")
                                 errors.append(error_msg)
                                 if "temp_file_path" in locals() and os.path.exists(
