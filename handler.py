@@ -961,8 +961,89 @@ def handler(job):
                         error_msg = f"Failed to fetch video data for {filename} from /view endpoint."
                         errors.append(error_msg)
 
+            # --- GIFs ---
+            if "gifs" in node_output:
+                print(
+                    f"worker-comfyui - Node {node_id} contains {len(node_output['gifs'])} gif(s)"
+                )
+                for gif_info in node_output["gifs"]:
+                    filename = gif_info.get("filename")
+                    subfolder = gif_info.get("subfolder", "")
+                    gif_type = gif_info.get("type")
+
+                    if gif_type == "temp":
+                        print(
+                            f"worker-comfyui - Skipping gif {filename} because type is 'temp'"
+                        )
+                        continue
+
+                    if not filename:
+                        warn_msg = f"Skipping gif in node {node_id} due to missing filename: {gif_info}"
+                        print(f"worker-comfyui - {warn_msg}")
+                        errors.append(warn_msg)
+                        continue
+
+                    file_bytes = get_image_data(filename, subfolder, gif_type)
+
+                    if file_bytes:
+                        file_extension = os.path.splitext(filename)[1] or ".gif"
+
+                        if not return_base64 and gcs_bucket_creds and gcs_bucket_name:
+                            try:
+                                os.makedirs("/runpod-volume/tmp", exist_ok=True)
+                                with tempfile.NamedTemporaryFile(dir="/runpod-volume/tmp", suffix=file_extension, delete=False) as temp_file:
+                                    temp_file.write(file_bytes)
+                                    temp_file_path = temp_file.name
+                                print(f"worker-comfyui - Wrote gif bytes to temporary file: {temp_file_path}")
+                                print(
+                                    f"worker-comfyui - Uploading {filename} to bucket {gcs_bucket_name} with prefix '{upload_prefix}'..."
+                                )
+                                presigned_url = upload_file_to_bucket(
+                                    filename,
+                                    temp_file_path,
+                                    gcs_bucket_creds,
+                                    gcs_bucket_name,
+                                    upload_prefix,
+                                )
+                                os.remove(temp_file_path)
+                                print(
+                                    f"worker-comfyui - Uploaded {filename} to bucket: {presigned_url}"
+                                )
+                                output_data.append(
+                                    {
+                                        "filename": filename,
+                                        "type": "url",
+                                        "data": presigned_url,
+                                    }
+                                )
+                            except Exception as e:
+                                error_msg = (
+                                    f"Error uploading {filename} to bucket {gcs_bucket_name} "
+                                    f"(endpoint={gcs_bucket_creds.get('endpointUrl')}, prefix={upload_prefix}): {e}"
+                                )
+                                print(f"worker-comfyui - {error_msg}")
+                                errors.append(error_msg)
+                        else:
+                            try:
+                                base64_gif = base64.b64encode(file_bytes).decode("utf-8")
+                                output_data.append(
+                                    {
+                                        "filename": filename,
+                                        "type": "base64",
+                                        "data": base64_gif,
+                                    }
+                                )
+                                print(f"worker-comfyui - Encoded {filename} as base64 (gif)")
+                            except Exception as e:
+                                error_msg = f"Error encoding {filename} to base64: {e}"
+                                print(f"worker-comfyui - {error_msg}")
+                                errors.append(error_msg)
+                    else:
+                        error_msg = f"Failed to fetch gif data for {filename} from /view endpoint."
+                        errors.append(error_msg)
+
             # Check for other output types
-            other_keys = [k for k in node_output.keys() if k not in ("images", "videos")]
+            other_keys = [k for k in node_output.keys() if k not in ("images", "videos", "gifs")]
             if other_keys:
                 warn_msg = (
                     f"Node {node_id} produced unhandled output keys: {other_keys}."
