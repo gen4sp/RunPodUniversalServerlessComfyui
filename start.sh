@@ -106,9 +106,15 @@ echo "🐍 Проверяем возможность импорта ComfyUI мо
 python -c "import sys; sys.path.append('.'); import folder_paths; print('✅ folder_paths импортирован')" 2>/dev/null || echo "⚠️ Проблемы с импортом folder_paths"
 
 echo "🚀 Запускаем ComfyUI с логированием..."
-python -u main.py --verbose > /tmp/comfyui.log 2>&1 &
+# Создаем директорию для логов если её нет
+mkdir -p /workspace/ComfyUI/user
+# Запускаем ComfyUI с перенаправлением логов в оба места для совместимости
+python -u main.py --verbose 2>&1 | tee /tmp/comfyui.log /workspace/ComfyUI/user/comfyui.log &
 COMFY_PID=$!
 echo "🆔 ComfyUI PID: $COMFY_PID"
+echo "📝 Логи ComfyUI записываются в:"
+echo "   - /tmp/comfyui.log"
+echo "   - /workspace/ComfyUI/user/comfyui.log"
 
 # 6. Ждём порт 8188 (макс. 60 с - увеличил время для первого запуска)
 echo "⏩ Waiting for ComfyUI to start on port 8188..."

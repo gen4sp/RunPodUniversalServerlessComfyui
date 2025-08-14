@@ -79,11 +79,15 @@ RUN mkdir -p /runpod-volume
 # Очищаем временные файлы
 RUN rm -rf /tmp/* /var/tmp/* /root/.cache
 
-# Устанавливаем переменные окружения для совместимости
+# Устанавливаем переменные окружения для совместимости и детального логирования
 ENV COMFYUI_PATH=/workspace/ComfyUI \
     SKIP_MODEL_DOWNLOAD=1 \
     PYTHONUNBUFFERED=1 \
-    CUDA_VISIBLE_DEVICES=0
+    CUDA_VISIBLE_DEVICES=0 \
+    WEBSOCKET_TRACE=false \
+    WEBSOCKET_RECONNECT_ATTEMPTS=5 \
+    WEBSOCKET_RECONNECT_DELAY_S=3 \
+    RUNPOD_DEBUG=true
 
 # Создаем volume точки
 VOLUME ["/runpod-volume"]

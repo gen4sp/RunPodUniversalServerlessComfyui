@@ -38,6 +38,14 @@ if os.environ.get("WEBSOCKET_TRACE", "false").lower() == "true":
     # protocol errors but can be noisy in production – therefore gated behind an env-var.
     websocket.enableTrace(True)
 
+# Debug mode for detailed logging (set RUNPOD_DEBUG=true to enable)
+DEBUG_MODE = os.environ.get("RUNPOD_DEBUG", "false").lower() == "true"
+
+def debug_log(message):
+    """Выводит отладочную информацию только если включен DEBUG_MODE"""
+    if DEBUG_MODE:
+        print(f"worker-comfyui - DEBUG: {message}")
+
 # Host where ComfyUI is running
 COMFY_HOST = "127.0.0.1:8188"
 
@@ -623,8 +631,34 @@ def handler(job):
     Returns:
         dict: A dictionary containing either an error message or a success status with generated images.
     """
-    job_input = job["input"]
-    job_id = job["id"]
+    print(f"worker-comfyui - Handler called with job ID: {job.get('id', 'unknown')}")
+    print(f"worker-comfyui - Job input keys: {list(job.get('input', {}).keys())}")
+    
+    # Логируем время начала обработки
+    start_time = time.time()
+    print(f"worker-comfyui - Processing started at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
+    
+    try:
+        job_input = job["input"]
+        job_id = job["id"]
+        
+        # Логируем основные параметры запроса (без чувствительных данных)
+        safe_input = {k: (str(v)[:200] + "..." if len(str(v)) > 200 else v) 
+                     for k, v in job_input.items() 
+                     if k not in ["workflow", "images"]}  # Исключаем большие объекты
+        if "workflow" in job_input:
+            safe_input["workflow_keys"] = list(job_input["workflow"].keys()) if isinstance(job_input["workflow"], dict) else "non-dict"
+        if "images" in job_input:
+            safe_input["images_count"] = len(job_input["images"]) if isinstance(job_input["images"], list) else "non-list"
+        
+        print(f"worker-comfyui - Job input summary: {json.dumps(safe_input, indent=2)}")
+        
+    except KeyError as e:
+        error_msg = f"Missing required job field: {e}"
+        print(f"worker-comfyui - ERROR: {error_msg}")
+        print(f"worker-comfyui - Full job data: {job}")
+        print(traceback.format_exc())
+        return {"error": error_msg}
 
     # Optional output controls and upload prefix for both remote and local flows
     return_base64 = bool(job_input.get("return_base64", False))
@@ -681,6 +715,8 @@ def handler(job):
 
         # Queue the workflow
         try:
+            debug_log(f"Queuing workflow with client_id: {client_id}")
+            debug_log(f"Workflow has {len(workflow)} nodes")
             queued_workflow = queue_workflow(workflow, client_id)
             prompt_id = queued_workflow.get("prompt_id")
             if not prompt_id:
@@ -688,6 +724,7 @@ def handler(job):
                     f"Missing 'prompt_id' in queue response: {queued_workflow}"
                 )
             print(f"worker-comfyui - Queued workflow with ID: {prompt_id}")
+            debug_log(f"Queue response: {queued_workflow}")
         except requests.RequestException as e:
             print(f"worker-comfyui - Error queuing workflow: {e}")
             raise ValueError(f"Error queuing workflow: {e}")
@@ -705,8 +742,10 @@ def handler(job):
         while True:
             try:
                 out = ws.recv()
+                debug_log(f"Received websocket message: {str(out)[:500]}...")
                 if isinstance(out, str):
                     message = json.loads(out)
+                    debug_log(f"Parsed message type: {message.get('type')}")
                     if message.get("type") == "status":
                         status_data = message.get("data", {}).get("status", {})
                         print(
@@ -1054,21 +1093,33 @@ def handler(job):
                 )
 
     except websocket.WebSocketException as e:
-        print(f"worker-comfyui - WebSocket Error: {e}")
+        error_msg = f"WebSocket communication error: {e}"
+        print(f"worker-comfyui - WebSocket Error: {error_msg}")
+        print(f"worker-comfyui - WebSocket error type: {type(e).__name__}")
+        print(f"worker-comfyui - Job ID: {job_id}, Prompt ID: {prompt_id}")
         print(traceback.format_exc())
-        return {"error": f"WebSocket communication error: {e}"}
+        return {"error": error_msg}
     except requests.RequestException as e:
-        print(f"worker-comfyui - HTTP Request Error: {e}")
+        error_msg = f"HTTP communication error with ComfyUI: {e}"
+        print(f"worker-comfyui - HTTP Request Error: {error_msg}")
+        print(f"worker-comfyui - Request error type: {type(e).__name__}")
+        print(f"worker-comfyui - Job ID: {job_id}, Prompt ID: {prompt_id}")
         print(traceback.format_exc())
-        return {"error": f"HTTP communication error with ComfyUI: {e}"}
+        return {"error": error_msg}
     except ValueError as e:
-        print(f"worker-comfyui - Value Error: {e}")
+        error_msg = str(e)
+        print(f"worker-comfyui - Value Error: {error_msg}")
+        print(f"worker-comfyui - Job ID: {job_id}, Prompt ID: {prompt_id}")
         print(traceback.format_exc())
-        return {"error": str(e)}
+        return {"error": error_msg}
     except Exception as e:
-        print(f"worker-comfyui - Unexpected Handler Error: {e}")
+        error_msg = f"An unexpected error occurred: {e}"
+        print(f"worker-comfyui - Unexpected Handler Error: {error_msg}")
+        print(f"worker-comfyui - Error type: {type(e).__name__}")
+        print(f"worker-comfyui - Job ID: {job_id}, Prompt ID: {prompt_id}")
+        print(f"worker-comfyui - Job input summary: {json.dumps({k: str(v)[:100] + '...' if len(str(v)) > 100 else v for k, v in job_input.items()}, indent=2)}")
         print(traceback.format_exc())
-        return {"error": f"An unexpected error occurred: {e}"}
+        return {"error": error_msg}
     finally:
         if ws and ws.connected:
             print(f"worker-comfyui - Closing websocket connection.")
@@ -1096,6 +1147,11 @@ def handler(job):
         final_result["status"] = "success_no_images"
         final_result["images"] = []
 
+    # Логируем время завершения и общее время выполнения
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print(f"worker-comfyui - Job completed at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time))}")
+    print(f"worker-comfyui - Total execution time: {execution_time:.2f} seconds")
     print(f"worker-comfyui - Job completed. Returning {len(output_data)} image(s).")
     return final_result
 
