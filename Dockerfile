@@ -44,6 +44,7 @@ COPY start.sh /start.sh
 COPY debug-modules.sh /debug-modules.sh
 COPY handler.py /handler.py
 COPY snapshot.json /snapshot.json
+COPY scripts/ /scripts/
 
 # Делаем скрипты исполняемыми
 RUN chmod +x /start.sh /debug-modules.sh
