@@ -175,8 +175,19 @@ def validate_input(job_input):
                 "'images' must be a list of objects with 'name' and 'image' keys",
             )
 
+    # Validate 'videos' in input, if provided
+    videos = job_input.get("videos")
+    if videos is not None:
+        if not isinstance(videos, list) or not all(
+            "name" in video and "video" in video for video in videos
+        ):
+            return (
+                None,
+                "'videos' must be a list of objects with 'name' and 'video' keys",
+            )
+
     # Return validated data and no error
-    return {"workflow": workflow, "images": images}, None
+    return {"workflow": workflow, "images": images, "videos": videos}, None
 
 
 def check_server(url, retries=500, delay=50):
@@ -295,6 +306,86 @@ def upload_images(images):
     return {
         "status": "success",
         "message": "All images uploaded successfully",
+        "details": responses,
+    }
+
+
+def upload_videos(videos):
+    """
+    Upload a list of base64 encoded videos to the ComfyUI server using the /upload/image endpoint.
+
+    Args:
+        videos (list): A list of dictionaries, each containing the 'name' of the video and the 'video' as a base64 encoded string.
+
+    Returns:
+        dict: A dictionary indicating success or error.
+    """
+    if not videos:
+        return {"status": "success", "message": "No videos to upload", "details": []}
+
+    responses = []
+    upload_errors = []
+
+    print(f"worker-comfyui - Uploading {len(videos)} video(s)...")
+
+    for video in videos:
+        try:
+            name = video["name"]
+            video_data_uri = video["video"]  # Full string, may include data URI prefix
+
+            # Strip Data URI prefix if present
+            if "," in video_data_uri:
+                base64_data = video_data_uri.split(",", 1)[1]
+            else:
+                base64_data = video_data_uri
+
+            blob = base64.b64decode(base64_data)
+
+            # Prepare the form data. ComfyUI accepts arbitrary files via this endpoint.
+            files = {
+                # Field name must be 'image' for the endpoint, even for videos
+                "image": (name, BytesIO(blob), "video/mp4"),
+                "overwrite": (None, "true"),
+            }
+
+            # POST request to upload the video (longer timeout for larger files)
+            response = requests.post(
+                f"http://{COMFY_HOST}/upload/image", files=files, timeout=120
+            )
+            response.raise_for_status()
+
+            responses.append(f"Successfully uploaded {name}")
+            print(f"worker-comfyui - Successfully uploaded video {name}")
+
+        except base64.binascii.Error as e:
+            error_msg = f"Error decoding base64 for {video.get('name', 'unknown')}: {e}"
+            print(f"worker-comfyui - {error_msg}")
+            upload_errors.append(error_msg)
+        except requests.Timeout:
+            error_msg = f"Timeout uploading {video.get('name', 'unknown')}"
+            print(f"worker-comfyui - {error_msg}")
+            upload_errors.append(error_msg)
+        except requests.RequestException as e:
+            error_msg = f"Error uploading {video.get('name', 'unknown')}: {e}"
+            print(f"worker-comfyui - {error_msg}")
+            upload_errors.append(error_msg)
+        except Exception as e:
+            error_msg = f"Unexpected error uploading {video.get('name', 'unknown')}: {e}"
+            print(f"worker-comfyui - {error_msg}")
+            upload_errors.append(error_msg)
+
+    if upload_errors:
+        print(f"worker-comfyui - video(s) upload finished with errors")
+        return {
+            "status": "error",
+            "message": "Some videos failed to upload",
+            "details": upload_errors,
+        }
+
+    print(f"worker-comfyui - video(s) upload complete")
+    return {
+        "status": "success",
+        "message": "All videos uploaded successfully",
         "details": responses,
     }
 
@@ -678,6 +769,7 @@ def handler(job):
 
     workflow = validated_data["workflow"]
     input_images = validated_data.get("images")
+    input_videos = validated_data.get("videos")
 
     # Make sure that the ComfyUI HTTP API is available before proceeding
     if not check_server(
@@ -696,6 +788,15 @@ def handler(job):
             # Return upload errors
             return {
                 "error": "Failed to upload one or more input images",
+                "details": upload_result["details"],
+            }
+
+    # Upload input videos if they exist
+    if input_videos:
+        upload_result = upload_videos(input_videos)
+        if upload_result["status"] == "error":
+            return {
+                "error": "Failed to upload one or more input videos",
                 "details": upload_result["details"],
             }
 
