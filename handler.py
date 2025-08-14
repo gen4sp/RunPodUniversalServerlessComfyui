@@ -49,6 +49,96 @@ def debug_log(message):
 # Host where ComfyUI is running
 COMFY_HOST = "127.0.0.1:8188"
 
+# Basic file type detection by extension
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v"}
+
+def _infer_mime_type(filename: str, default: str) -> str:
+    """Infer a simple MIME type from file extension.
+
+    Keeps logic lightweight and avoids extra deps. Falls back to provided default.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in {".png"}: return "image/png"
+    if ext in {".jpg", ".jpeg"}: return "image/jpeg"
+    if ext in {".webp"}: return "image/webp"
+    if ext in {".bmp"}: return "image/bmp"
+    if ext in {".gif"}: return "image/gif"
+    if ext in {".mp4", ".m4v"}: return "video/mp4"
+    if ext in {".mov"}: return "video/quicktime"
+    if ext in {".webm"}: return "video/webm"
+    if ext in {".avi"}: return "video/x-msvideo"
+    return default
+
+
+def _get_existing_input_dirs():
+    """Return list of ComfyUI input directories that exist in current container."""
+    candidate_dirs = [
+        "/workspace/ComfyUI/input",
+        "/runpod-volume/ComfyUI/input",
+    ]
+    existing_dirs = [d for d in candidate_dirs if os.path.isdir(d)]
+    return existing_dirs
+
+
+def save_files_to_input(files_map):
+    """
+    Save provided files (name -> base64 or data URL) into ComfyUI input folder(s).
+
+    This ensures nodes like VHS_LoadVideo can find the file by name during prompt validation.
+
+    Args:
+        files_map (dict[str, str]): Mapping of filename to base64 string (or data URI).
+
+    Returns:
+        dict: status dict with details or errors.
+    """
+    if not files_map:
+        return {"status": "success", "message": "No files to save", "details": []}
+
+    input_dirs = _get_existing_input_dirs()
+    if not input_dirs:
+        msg = "No ComfyUI input directory found to save files"
+        print(f"worker-comfyui - {msg}")
+        return {"status": "error", "message": msg, "details": []}
+
+    results = []
+    errors = []
+    print(f"worker-comfyui - Saving {len(files_map)} file(s) to input dirs: {', '.join(input_dirs)}")
+
+    for original_name, data_str in files_map.items():
+        try:
+            basename = os.path.basename(original_name)
+            # Strip Data URI prefix if present
+            if "," in data_str:
+                base64_data = data_str.split(",", 1)[1]
+            else:
+                base64_data = data_str
+
+            blob = base64.b64decode(base64_data)
+
+            for dir_path in input_dirs:
+                os.makedirs(dir_path, exist_ok=True)
+                target_path = os.path.join(dir_path, basename)
+                with open(target_path, "wb") as f:
+                    f.write(blob)
+                results.append(f"Saved {basename} to {target_path}")
+                print(f"worker-comfyui - Saved {basename} to {target_path}")
+
+        except base64.binascii.Error as e:
+            err = f"Error decoding base64 for {original_name}: {e}"
+            print(f"worker-comfyui - {err}")
+            errors.append(err)
+        except Exception as e:
+            err = f"Error saving file {original_name} to input: {e}"
+            print(f"worker-comfyui - {err}")
+            errors.append(err)
+
+    if errors:
+        return {"status": "error", "message": "Some files failed to save", "details": errors}
+
+    return {"status": "success", "message": "All files saved to input", "details": results}
+
 # ---------------------------------------------------------------------------
 # Helper: quick reachability probe of ComfyUI HTTP endpoint (port 8188)
 # ---------------------------------------------------------------------------
@@ -186,8 +276,19 @@ def validate_input(job_input):
                 "'videos' must be a list of objects with 'name' and 'video' keys",
             )
 
+    # Validate 'files' in input, if provided (dict: filename -> base64)
+    files = job_input.get("files")
+    if files is not None:
+        if not isinstance(files, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in files.items()
+        ):
+            return (
+                None,
+                "'files' must be an object mapping filename to base64 string",
+            )
+
     # Return validated data and no error
-    return {"workflow": workflow, "images": images, "videos": videos}, None
+    return {"workflow": workflow, "images": images, "videos": videos, "files": files}, None
 
 
 def check_server(url, retries=500, delay=50):
@@ -262,7 +363,7 @@ def upload_images(images):
 
             # Prepare the form data
             files = {
-                "image": (name, BytesIO(blob), "image/png"),
+                "image": (name, BytesIO(blob), _infer_mime_type(name, "image/png")),
                 "overwrite": (None, "true"),
             }
 
@@ -344,7 +445,7 @@ def upload_videos(videos):
             # Prepare the form data. ComfyUI accepts arbitrary files via this endpoint.
             files = {
                 # Field name must be 'image' for the endpoint, even for videos
-                "image": (name, BytesIO(blob), "video/mp4"),
+                "image": (name, BytesIO(blob), _infer_mime_type(name, "video/mp4")),
                 "overwrite": (None, "true"),
             }
 
@@ -770,6 +871,7 @@ def handler(job):
     workflow = validated_data["workflow"]
     input_images = validated_data.get("images")
     input_videos = validated_data.get("videos")
+    input_files = validated_data.get("files")
 
     # Make sure that the ComfyUI HTTP API is available before proceeding
     if not check_server(
@@ -780,6 +882,27 @@ def handler(job):
         return {
             "error": f"ComfyUI server ({COMFY_HOST}) not reachable after multiple retries."
         }
+
+    # Derive uploads from 'files' if provided
+    if input_files:
+        # First, persist files into ComfyUI input directory for nodes that read by name
+        save_result = save_files_to_input(input_files)
+        if save_result.get("status") == "error":
+            return {"error": "Failed to save files to ComfyUI input", "details": save_result.get("details", [])}
+
+        derived_images = []
+        derived_videos = []
+        for filename, b64data in input_files.items():
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in VIDEO_EXTENSIONS:
+                derived_videos.append({"name": filename, "video": b64data})
+            elif ext in IMAGE_EXTENSIONS:
+                derived_images.append({"name": filename, "image": b64data})
+
+        if derived_images:
+            input_images = (input_images or []) + derived_images
+        if derived_videos:
+            input_videos = (input_videos or []) + derived_videos
 
     # Upload input images if they exist
     if input_images:
