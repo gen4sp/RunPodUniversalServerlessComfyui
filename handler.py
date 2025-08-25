@@ -32,14 +32,21 @@ COMFY_API_AVAILABLE_MAX_RETRIES = 2000
 WEBSOCKET_RECONNECT_ATTEMPTS = int(os.environ.get("WEBSOCKET_RECONNECT_ATTEMPTS", 5))
 WEBSOCKET_RECONNECT_DELAY_S = int(os.environ.get("WEBSOCKET_RECONNECT_DELAY_S", 3))
 
-# Extra verbose websocket trace logs (set WEBSOCKET_TRACE=true to enable)
-if os.environ.get("WEBSOCKET_TRACE", "false").lower() == "true":
+# Runpod serverless runtime keep-alive restart delay (seconds) if the SDK unexpectedly exits
+RUNPOD_HANDLER_RESTART_DELAY_S = int(os.environ.get("RUNPOD_HANDLER_RESTART_DELAY_S", 3))
+
+def _env_is_truthy(var_name: str, default: str = "false") -> bool:
+    """Normalize common truthy env values: 1/true/yes/on (case-insensitive)."""
+    return str(os.environ.get(var_name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+# Extra verbose websocket trace logs (set WEBSOCKET_TRACE=true/1/yes to enable)
+if _env_is_truthy("WEBSOCKET_TRACE", "false"):
     # This prints low-level frame information to stdout which is invaluable for diagnosing
     # protocol errors but can be noisy in production – therefore gated behind an env-var.
     websocket.enableTrace(True)
 
-# Debug mode for detailed logging (set RUNPOD_DEBUG=true to enable)
-DEBUG_MODE = os.environ.get("RUNPOD_DEBUG", "false").lower() == "true"
+# Debug mode for detailed logging (set RUNPOD_DEBUG=true/1/yes to enable)
+DEBUG_MODE = _env_is_truthy("RUNPOD_DEBUG", "false")
 
 def debug_log(message):
     """Выводит отладочную информацию только если включен DEBUG_MODE"""
@@ -1414,4 +1421,20 @@ if __name__ == "__main__":
         print(json.dumps(result, indent=2))
     else:
         print("worker-comfyui - Starting handler...")
-        runpod.serverless.start({"handler": handler})
+        # Keep the process alive even if the runpod SDK exits unexpectedly
+        attempt_counter = 0
+        while True:
+            attempt_counter += 1
+            try:
+                print(f"worker-comfyui - Starting Serverless Worker |  attempt #{attempt_counter}")
+                runpod.serverless.start({"handler": handler})
+                # If start() returns, log and restart after a short delay
+                print(
+                    f"worker-comfyui - runpod.serverless.start() returned. Restarting in {RUNPOD_HANDLER_RESTART_DELAY_S}s..."
+                )
+            except Exception as e:
+                print(
+                    f"worker-comfyui - Runpod runtime crashed with error: {e}. Restarting in {RUNPOD_HANDLER_RESTART_DELAY_S}s..."
+                )
+                print(traceback.format_exc())
+            time.sleep(RUNPOD_HANDLER_RESTART_DELAY_S)
