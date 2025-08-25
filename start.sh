@@ -65,6 +65,12 @@ else
     done
 fi
 
+# 4.5 Очистка мусорных директорий, мешающих импорту кастомных нод
+if [ -d "$APP/custom_nodes" ]; then
+    echo "🧹 Removing .ipynb_checkpoints from custom_nodes..."
+    find "$APP/custom_nodes" -type d -name ".ipynb_checkpoints" -exec rm -rf {} + || true
+fi
+
 # Проверяем финальное состояние
 echo "📁 Финальная проверка ComfyUI:"
 echo "APP путь: $APP"
